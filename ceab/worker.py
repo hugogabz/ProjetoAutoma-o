@@ -2,7 +2,8 @@
 import signal
 import threading
 from collections import deque
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
+from .browser_session import open_persistent
 from .eproc import Eproc
 from .models import AutomationError, Benefit
 from .state import State, now
@@ -10,11 +11,14 @@ from .rules import decide
 
 
 class Worker:
-    def __init__(self,state,run,adapter):
+    def __init__(self,state,run,adapter,auto_start=True):
         self.state, self.run, self.adapter = state,run,adapter
         self.pages = {}
         self.source_urls = {}
         self.pending = deque()
+        self.managed = not auto_start
+        self.started = auto_start
+        self.close_requested = False
         self.paused = False
         self.cancelled = False
         self.queue_loaded = False
@@ -28,7 +32,12 @@ class Worker:
     def controls(self):
         for cmd in self.state.commands(self.run):
             kind,payload = cmd['type'],cmd['payload']
-            if kind == 'cancelar': self.cancelled = True
+            if kind == 'iniciar':
+                self.started = True
+                self.state.execution_update(self.run,queue_started=1)
+            elif kind == 'fechar_navegador':
+                self.cancelled = self.close_requested = True
+            elif kind == 'cancelar': self.cancelled = True
             elif kind == 'pausar': self.paused = True
             elif kind == 'retomar':
                 self.paused = False
@@ -117,11 +126,20 @@ class Worker:
         self.controls()
         if self.cancelled: return False
         if self.paused: return True
+        if not self.started:
+            self.state.execution_update(self.run,status='CONFERENCIA',message='Navegador aberto com perfil salvo. Faça login se necessário, abra a lista e clique em Iniciar processamento.')
+            return True
         if not self.queue_loaded:
             try:
                 pages = self.adapter.open_queue()
             except AutomationError as exc:
-                if exc.code != 'SESSAO_EXPIRADA': raise
+                if exc.code != 'SESSAO_EXPIRADA':
+                    if self.managed and exc.code=='ELEMENTO_NAO_ENCONTRADO':
+                        self.started = False
+                        self.state.execution_update(self.run,status='CONFERENCIA',queue_started=0,message=str(exc)+' Abra ou ajuste a lista e clique em Iniciar processamento novamente.')
+                        self.audit(None,'FILA_INDISPONIVEL',{'code':exc.code},str(exc))
+                        return True
+                    raise
                 self.paused = self.session_paused = True
                 self.state.execution_update(self.run,status='PAUSADO',message=str(exc))
                 self.audit(None,'SESSAO_EXPIRADA',{},str(exc))
@@ -154,8 +172,12 @@ class Worker:
         self.state.execution_update(self.run,status='EXECUTANDO',connected=1)
         while self.step():
             # Polling de comandos; tempos do navegador usam esperas por elementos/eventos.
-            self.exit_event.wait(.25)
-        self.state.execution_update(self.run,status='CANCELADO' if self.cancelled else 'CONCLUIDO',connected=0,message='Execução cancelada; abas preservadas.' if self.cancelled else 'Todos os processos desta execução foram tratados.')
+            if self.managed:
+                try: self.adapter.context.wait_for_event('close',timeout=250)
+                except PlaywrightTimeout: pass
+                except Exception: self.cancelled = True
+            else: self.exit_event.wait(.25)
+        self.state.execution_update(self.run,status='CANCELADO' if self.cancelled else 'CONCLUIDO',connected=0,message='Execução cancelada; navegador preservado até você encerrá-lo.' if self.cancelled else 'Todos os processos desta execução foram tratados.')
 
 
 def run_worker(path,run):
@@ -166,35 +188,68 @@ def run_worker(path,run):
     import os
     if not state.claim_execution(run,os.getpid()):
         raise ValueError('Outro worker já assumiu esta execução.')
+    managed = config['browser_mode']=='persistent'
+    context = None
     worker = None
+    closed = threading.Event()
+    def report_error(exc):
+        message = str(exc) if isinstance(exc,AutomationError) else (
+            'Não foi possível abrir/manter o Chrome do sistema. Confira se Chrome/Chromium está instalado, se há uma sessão gráfica e se o perfil da automação já está aberto.' if managed else
+            'Não foi possível conectar/manter o navegador pela porta CDP. Confira a conexão local.')
+        state.log(run,None,'WORKER_ERRO',{'code':getattr(exc,'code','NAVEGADOR')},message)
+        state.execution_update(run,status='ERRO',connected=0,message=message)
     try:
         with sync_playwright() as playwright:
-            browser = playwright.chromium.connect_over_cdp(config['cdp_url'],timeout=15000,no_defaults=True)
-            if not browser.contexts:
-                raise AutomationError('ELEMENTO_NAO_ENCONTRADO','Nenhuma sessão acessível no navegador existente.')
-            adapter = None
-            queue_error = None
-            expired_context = None
-            for context in browser.contexts:
-                candidate = Eproc(context,lambda n,a,v=None,r='OK': state.log(run,n,a,v,r))
-                try: candidate.queue_page()
-                except AutomationError as exc:
-                    queue_error = exc
-                    if exc.code == 'SESSAO_EXPIRADA': expired_context = candidate
-                    continue
-                adapter = candidate
-                break
-            if adapter is None and expired_context is not None:
-                adapter = expired_context
-            if adapter is None:
-                raise queue_error or AutomationError('ELEMENTO_NAO_ENCONTRADO','Lista de Processos por Localizador não encontrada nas abas existentes.')
-            worker = Worker(state,run,adapter)
-            def stop_signal(*_): worker.cancelled = True
-            signal.signal(signal.SIGTERM,stop_signal)
-            signal.signal(signal.SIGINT,stop_signal)
-            worker.run_loop()
-            # Não chamar browser.close(): a sessão e as abas pertencem ao usuário.
+            try:
+                if managed:
+                    context = open_persistent(playwright,config)
+                    state.execution_update(run,browser_open=1,connected=1)
+                    context.on('close',lambda:closed.set())
+                    adapter = Eproc(context,lambda n,a,v=None,r='OK': state.log(run,n,a,v,r))
+                else:
+                    browser = playwright.chromium.connect_over_cdp(config['cdp_url'],timeout=15000,no_defaults=True)
+                    adapter = None
+                    queue_error = None
+                    expired_context = None
+                    for existing in browser.contexts:
+                        candidate = Eproc(existing,lambda n,a,v=None,r='OK': state.log(run,n,a,v,r))
+                        try: candidate.queue_page()
+                        except AutomationError as exc:
+                            queue_error = exc
+                            if exc.code == 'SESSAO_EXPIRADA': expired_context = candidate
+                            continue
+                        adapter = candidate
+                        break
+                    if adapter is None: adapter = expired_context
+                    if adapter is None:
+                        raise queue_error or AutomationError('ELEMENTO_NAO_ENCONTRADO','Lista de Processos por Localizador não encontrada nas abas existentes.')
+                worker = Worker(state,run,adapter,auto_start=not managed)
+                def stop_signal(*_):
+                    worker.cancelled = worker.close_requested = True
+                signal.signal(signal.SIGTERM,stop_signal)
+                signal.signal(signal.SIGINT,stop_signal)
+                if managed:
+                    context.on('close',lambda:setattr(worker,'cancelled',True))
+                worker.run_loop()
+            except Exception as exc:
+                report_error(exc)
+            finally:
+                if managed and context:
+                    # Conclusão/cancelamento não fecha as abas. A pessoa encerra
+                    # no painel ou na janela, e Chrome grava o perfil no disco.
+                    try:
+                        while not closed.is_set() and not (worker and worker.close_requested):
+                            commands = state.commands(run)
+                            if any(cmd['type']=='fechar_navegador' for cmd in commands): break
+                            state.execution_update(run,heartbeat=now())
+                            try: context.wait_for_event('close',timeout=500)
+                            except PlaywrightTimeout: continue
+                            except Exception: break
+                    finally:
+                        try: context.close()
+                        except Exception: pass
+                        state.execution_update(run,browser_open=0,connected=0)
+                # CDP: nunca fechar o navegador que pertence ao usuário.
     except Exception as exc:
-        message = str(exc) if isinstance(exc,AutomationError) else 'Não foi possível conectar/manter o Chromium na porta CDP. Confira se a sessão existente permite depuração remota e procure a aba novamente.'
-        state.log(run,None,'WORKER_ERRO',{'code':getattr(exc,'code','CONEXAO_CDP')},message)
-        state.execution_update(run,status='ERRO',connected=0,message=message)
+        report_error(exc)
+        if managed: state.execution_update(run,browser_open=0,connected=0)

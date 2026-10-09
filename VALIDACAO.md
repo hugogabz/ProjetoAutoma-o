@@ -1,44 +1,38 @@
 # Validação da implementação
 
-Ambiente testado: Python 3.12, Chromium 151, dependências de `requirements.lock`.
+Ambiente testado: Python 3.12, Chromium 151 e dependências de `requirements.lock`.
 
-- `python -m pytest -q`: **46 testes aprovados, nenhum pulado**, com as amostras
+- `python -m pytest -q`: **54 testes aprovados, nenhum pulado**, com as amostras
   pessoais disponíveis no diretório local ignorado `samples/private/`.
-- Verificação adicional da UI e do estado após inclusão dos avisos no painel:
-  `python -m pytest tests/test_ui.py tests/test_state_worker.py -q`.
-- Instalação repetida via `CEAB_VENV_DIR=/workspace/ceab-venv bash scripts/setup.sh`
-  concluída sem alterar os arquivos de dependências.
-- `python -m pip check`: nenhuma dependência incompatível.
-- Streamlit iniciado; endpoint de saúde respondeu `ok`. Chromium renderizou
-  o painel sem exceções e com modo teste ligado.
+- Novo modo padrão: worker abre navegador gerenciado com perfil persistente,
+  espera comando explícito antes de processar e não exige uma porta CDP.
+- Cookie de sessão sintético (sem data de expiração) e armazenamento local
+  preservados após fechar e reabrir Chromium no mesmo perfil.
+- Execução completa do worker gerenciado, com conferência e envio simulado,
+  sem clicar em Intimar ou salvar minuta. Abas permanecem abertas após terminar;
+  o comando Encerrar navegador fecha o contexto e mantém o perfil no disco.
+- Perfis de demonstração e produção separados por nome do banco.
+- Banco antigo migrado sem perder o histórico; proteções contra reenvio mantidas.
+- Falha na navegação inicial não destrói a janela antes do login manual.
+- Modo avançado CDP continua testado com descoberta read-only de abas e sessão
+  existente. O painel padrão não consulta portas nem pede depuração remota.
 
-Os testes incluem leitura dos dois PDFs reais (nomes invertidos em relação ao
-PRD), extração por células e por layout, datas e notas, NB, valores/honorários,
-regras de destino, preservação dos campos fora do escopo, máscara de datas,
-frames, seleção das abas e da proposta mais recente, aprovação e edição na UI,
-worker separado por CDP, sessão expirada, pausa/cancelamento, tentativa única
-persistente, erros isolados e minutar sem salvar em modo teste. Também
-verificam a descoberta read-only de abas existentes, portas dinâmicas no Linux,
-a recusa de endereços externos e a preservação dos cookies de uma sessão
-sintética já aberta. Uma aba de login antiga não impede localizar outra
-lista autenticada no mesmo contexto.
+Também são verificados extração por células e por layout nos dois PDFs reais,
+HTML, datas e notas, NB, valores/honorários, regras de destino, preservação dos
+campos fora do escopo, máscaras, frames, fila, seleção da proposta mais recente,
+aprovação e edição na UI, sessão expirada, pausa/cancelamento, tentativa única
+persistente, erros isolados e minuta sem salvar em modo teste.
 
-Os testes de envio efetivo, diálogos e gravação de minuta atingiram somente
-páginas de teste com dados sintéticos. Nenhuma requisição foi enviada ao eproc
-real. A sessão autenticada, a seleção de linhas e os controles de minuta do
-ambiente TRF6 ainda precisam de validação local pelo usuário, começando em
-modo teste.
+Os testes de envio efetivo e gravação de minuta atingem somente páginas locais
+com dados sintéticos. Nenhuma requisição foi enviada ao eproc real. Certificado,
+token, validade da sessão e controles do TRF6 ainda dependem de validação no
+computador do usuário, começando em modo teste. Login salvo não impede expiração
+ou novas exigências de autenticação pelo eproc.
 
-Os PDFs pessoais, banco SQLite, logs, credenciais e perfil Chromium não fazem
-parte do pacote de distribuição. Sem os PDFs, seus quatro testes dependentes
-serão pulados; os demais usam dados sintéticos versionados.
+A abertura de navegador foi exercitada em modo headless neste ambiente de nuvem.
+Na operação local, o modo padrão abre uma janela na sessão gráfica do usuário.
+A UI foi testada pelo Streamlit AppTest, sem Playwright no processo da UI.
 
-A descoberta não habilita CDP num navegador iniciado sem depuração remota.
-Não abre um navegador, não instala extensão e não extrai credenciais.
-
-Após melhorar o diagnóstico de conexão do Chrome, os testes afetados foram
-executados com `python -m pytest tests/test_discovery.py tests/test_ui.py
-tests/test_cdp_integration.py -q`: **11 aprovados**. Incluem distinção entre
-porta indisponível e navegador sem aba do eproc, tolerância a URL inválida
-em outra aba e integração CDP com sessão sintética existente. O Chrome do
-computador do usuário não foi acessado a partir da máquina de nuvem.
+Os PDFs pessoais, bancos, logs, credenciais e perfis de navegador não fazem parte
+do pacote de distribuição. Sem os PDFs, seus quatro testes serão pulados;
+os demais usam amostras sintéticas versionadas.

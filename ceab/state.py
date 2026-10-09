@@ -54,6 +54,13 @@ class State:
                 number TEXT, timestamp TEXT NOT NULL, action TEXT NOT NULL,
                 values_json TEXT NOT NULL, result TEXT NOT NULL);
             ''')
+            db.execute('BEGIN IMMEDIATE')
+            columns = {row['name'] for row in db.execute('PRAGMA table_info(execucao)')}
+            migrations = {'browser_mode':"TEXT NOT NULL DEFAULT 'cdp'",'profile_path':'TEXT','executable_path':'TEXT',
+                          'start_url':'TEXT','headless':'INTEGER NOT NULL DEFAULT 0','browser_open':'INTEGER NOT NULL DEFAULT 0',
+                          'queue_started':'INTEGER NOT NULL DEFAULT 0'}
+            for name,declaration in migrations.items():
+                if name not in columns: db.execute(f'ALTER TABLE execucao ADD COLUMN {name} {declaration}')
         self.path.chmod(0o600)
 
     @contextmanager
@@ -77,14 +84,17 @@ class State:
     def log(self, run, number, action, values=None, result='OK'):
         with self.connect() as db: self._log(db,run,number,action,values or {},result)
 
-    def create_execution(self, test_mode=True, cdp_url='http://localhost:9222'):
+    def create_execution(self, test_mode=True, cdp_url='http://localhost:9222', *, browser_mode='cdp', executable_path=None, start_url=None, headless=False):
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
             if db.execute('SELECT 1 FROM execucao WHERE status IN (?,?,?,?,?)', ACTIVE).fetchone():
                 raise ValueError('Já existe uma execução ativa. Cancele ou conclua antes de iniciar outra.')
             run = db.execute('INSERT INTO execucao(status,test_mode,cdp_url,created_at,heartbeat) VALUES(?,?,?,?,?)',
                              ('INICIANDO',int(test_mode),cdp_url,now(),now())).lastrowid
-            db.execute('INSERT INTO comando(execution_id,type,payload,created_at) VALUES(?,?,?,?)',(run,'iniciar','{}',now()))
+            if browser_mode not in ('cdp','persistent'): raise ValueError('Modo de navegador inválido.')
+            db.execute('UPDATE execucao SET browser_mode=?,profile_path=?,executable_path=?,start_url=?,headless=? WHERE id=?',
+                       (browser_mode,str(self.path.parent/(self.path.stem+'-browser-profile')) if browser_mode=='persistent' else None,executable_path,start_url or 'https://eproc1g.trf6.jus.br/eproc/',int(headless),run))
+            db.execute('INSERT INTO comando(execution_id,type,payload,created_at) VALUES(?,?,?,?)',(run,'abrir' if browser_mode=='persistent' else 'iniciar','{}',now()))
             self._log(db,run,None,'INICIAR',{'test_mode':test_mode},'SOLICITADO')
             return run
 
@@ -99,7 +109,7 @@ class State:
             return db.execute("UPDATE execucao SET status='EXECUTANDO',pid=?,heartbeat=? WHERE id=? AND status='INICIANDO'",(pid,now(),run)).rowcount == 1
 
     def execution_update(self, run, **fields):
-        allowed = {'status','connected','message','pid','heartbeat'}
+        allowed = {'status','connected','message','pid','heartbeat','browser_open','queue_started'}
         if not fields or not set(fields) <= allowed: raise ValueError('Campos de execução inválidos.')
         with self.connect() as db:
             db.execute('UPDATE execucao SET '+','.join(f'{k}=?' for k in fields)+' WHERE id=?',(*fields.values(),run))
@@ -151,10 +161,12 @@ class State:
             self._log(db,old['execution_id'],number,status,fields,'OK')
 
     def command(self, run, kind, payload=None):
-        if kind not in ('pausar','retomar','cancelar','ignorar','resolver'): raise ValueError('Comando inválido.')
+        if kind not in ('iniciar','fechar_navegador','pausar','retomar','cancelar','ignorar','resolver'): raise ValueError('Comando inválido.')
         with self.connect() as db:
-            execution = db.execute('SELECT status FROM execucao WHERE id=?',(run,)).fetchone()
-            if not execution or execution['status'] not in ACTIVE: raise ValueError('Execução encerrada.')
+            execution = db.execute('SELECT * FROM execucao WHERE id=?',(run,)).fetchone()
+            if not execution or (execution['status'] not in ACTIVE and not (kind=='fechar_navegador' and execution['browser_open'])): raise ValueError('Execução encerrada.')
+            if kind=='iniciar' and (execution['browser_mode']!='persistent' or not execution['browser_open'] or execution['queue_started']):
+                raise ValueError('Navegador indisponível ou processamento já iniciado.')
             db.execute('INSERT INTO comando(execution_id,type,payload,created_at) VALUES(?,?,?,?)',(run,kind,encode(payload or {}),now()))
             self._log(db,run,None,kind.upper(),payload or {},'SOLICITADO')
 

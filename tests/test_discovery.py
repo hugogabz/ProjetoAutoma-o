@@ -79,6 +79,7 @@ def test_panel_does_not_start_browser_when_nothing_is_found(tmp_path,monkeypatch
     def forbidden(*args,**kwargs): raise AssertionError('Navegador não deve ser iniciado.')
     monkeypatch.setattr('subprocess.Popen',forbidden)
     ui=AppTest.from_file(str(Path(__file__).resolve().parents[1]/'app.py')).run()
+    ui.selectbox(key='connection_mode').set_value('Navegador já aberto (avançado)').run()
     assert not ui.exception
     assert next(b for b in ui.button if b.label=='Iniciar').disabled
     assert any('Nenhuma aba' in i.value for i in ui.info)
@@ -89,6 +90,7 @@ def test_panel_can_find_existing_tab(tmp_path,monkeypatch):
     monkeypatch.setenv('CEAB_STATE_PATH',str(tmp_path/'state.db'))
     monkeypatch.setattr('ceab.discovery.find_existing_browsers',lambda:[{'endpoint':'http://127.0.0.1:9333','browser':'Brave','tabs':[{'title':'eproc','queue':True}]}])
     ui=AppTest.from_file(str(Path(__file__).resolve().parents[1]/'app.py')).run()
+    ui.selectbox(key='connection_mode').set_value('Navegador já aberto (avançado)').run()
     assert not ui.exception
     assert not next(b for b in ui.button if b.label=='Iniciar').disabled
     assert any('sessão' in i.value for i in ui.success)

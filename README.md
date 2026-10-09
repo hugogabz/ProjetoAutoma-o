@@ -29,80 +29,71 @@ As dependências diretas estão em `requirements.txt`; `requirements.lock` fixa
 as dependências transitivas da instalação testada. Não são necessários tokens
 ou APIs do eproc. Não execute o painel em um servidor público.
 
-## Operação: aproveitar a aba já aberta
+## Operação padrão: Chrome do sistema com login salvo
 
-O painel procura abas do eproc em navegadores que **já estão em execução**.
-Não inicia Brave/Chrome, não cria uma janela ou aba de login e não copia cookies.
-Não utiliza extensão. O worker assume a Lista de Processos por Localizador
-na sessão existente e mantém os critérios de conferência do PRD.
+Não é necessário iniciar Chrome por comando, ativar depuração remota ou
+informar uma porta. O próprio worker abre Chrome/Chromium com um perfil
+persistente da aplicação. Playwright usa sua conexão interna de automação;
+não expõe uma porta CDP para você configurar.
 
-**Limite técnico:** a sessão existente precisa estar acessível por depuração
-remota (CDP). Não é possível ativar CDP retroativamente em um Brave aberto
-normalmente. Sem esse acesso, o sistema informa que não encontrou uma aba
-acessível e não tenta reiniciar o navegador nem recuperar seus cookies.
-Versões que restringem a depuração do perfil padrão precisam de um perfil
-permitido pelo navegador. O sistema não contorna essa restrição.
-
-1. No Brave/Chrome já aberto com depuração remota, deixe a aba autenticada do
-   eproc na **Lista de Processos por Localizador**, com até 25 processos.
-2. Com o ambiente Python ativado, execute na raiz do repositório:
+1. Na raiz do repositório, ative o ambiente e abra o painel:
 
    ```bash
    streamlit run app.py --server.address 127.0.0.1 --browser.gatherUsageStats false
    ```
 
-3. O painel procura a aba automaticamente. Clique em **Procurar aba aberta**
-   se abriu o navegador ou mudou de página depois de iniciar o painel. No Linux,
-   descobre as portas declaradas pelos processos Brave/Chrome/Chromium do
-   próprio usuário, incluindo porta dinâmica indicada em `DevToolsActivePort`.
-   Também consulta as portas locais 9222 e 9223. Não varre todas as portas e
-   não lê histórico, cookies ou credenciais do perfil.
-4. Se houver mais de um navegador acessível, escolha **Navegador encontrado**.
-   O painel mostra os títulos das abas. O worker procura a lista nos contextos
-   existentes, incluindo uma sessão fora do primeiro contexto. Não abre outra
-   aba de lista nem de login. As abas de processos/documentos continuam sendo
-   abertas conforme o fluxo de trabalho do PRD.
-5. Mantenha **Modo teste** ligado e clique em **Iniciar**. Em **Conferir
-   formulário**, revise cada proposta, edite DIB/DIP/DCB se necessário, marque
-   **Conferi os dados e autorizo o envio** e clique em **Enviar conferidos**.
-6. Em teste, os valores aprovados são reaplicados e lidos de volta. Quando há
-   minuta de cálculos, a preferência é conferida numa aba temporária sem salvar.
-   Os processos ficam FINALIZADO/Simulado e as abas permanecem abertas.
-7. Para envio real, conclua/cancele a simulação, volte à lista existente e inicie
-   outra execução, desligando modo teste e confirmando a permissão de envio.
-   Simulações podem ser relidas; a aprovação anterior não é reutilizada. O
-   worker intima em sequência e só minuta quando o destino exige cálculos.
+2. Mantenha **Chrome do sistema (login salvo)** selecionado e **Modo teste**
+   ligado. Clique em **Abrir Chrome**. Chrome instalado é preferido; se não
+   houver, o sistema tenta Chromium instalado ou o Chromium do Playwright.
+3. A janela abre o eproc. Na primeira utilização, faça login manualmente
+   nessa janela (inclusive certificado/token quando necessário). O painel
+   espera; não tenta fazer login nem iniciar a fila automaticamente.
+4. Abra **Lista de Processos por Localizador** (até 25 processos) nessa janela.
+   Clique em **Iniciar processamento**. Se a lista não estiver disponível,
+   o painel explica o problema e permite ajustar a página e iniciar novamente.
+5. Em **Conferir formulário**, revise a proposta e as abas, edite DIB/DIP/DCB
+   se necessário, marque **Conferi os dados e autorizo o envio** e clique em
+   **Enviar conferidos**. As datas aprovadas são reaplicadas e verificadas.
+6. Modo teste não clica em Intimar nem salva minuta. Quando há cálculos,
+   confere a preferência numa aba temporária sem salvar. Fora do teste,
+   somente os processos aprovados são intimados, em sequência.
+7. Ao terminar ou cancelar, o navegador continua aberto para conferência.
+   Clique em **Encerrar navegador** (ou feche a janela) para encerrar com
+   gravação do perfil no disco. Para outra execução, clique em **Abrir Chrome**:
+   o mesmo perfil será usado, sem apagar seu login ou suas preferências.
 
-Se usa outra porta que não foi descoberta, abra **Conexão manual / aba não
-encontrada**, marque a opção manual e informe, por exemplo,
-`http://localhost:9333`. Somente endereços de loopback são aceitos.
+**O login depende da validade da sessão do eproc.** O perfil conserva cookies
+(incluindo a restauração de sessão do Chrome), armazenamento local e dados do
+navegador entre aberturas. Não evita expiração da sessão, exigência de novo
+certificado/token, logout ou políticas do servidor. Se o eproc pedir login
+novamente, entre na mesma janela e continue.
 
-### Quando o navegador ainda não oferece CDP
-
-Isso exige preparação manual antes de usá-lo na automação. Para Brave no Linux,
-a opção abaixo utiliza um perfil persistente separado:
-
-```bash
-brave-browser --remote-debugging-port=9222 --user-data-dir="$HOME/.ceab-brave" --disable-popup-blocking
-```
-
-Use `brave` se esse for o nome do executável. Faça login nesse perfil uma vez e
-mantenha sua janela aberta para as execuções seguintes, enquanto a sessão for
-válida. Reabrir o mesmo perfil preserva os dados do navegador; o eproc pode
-exigir novo login quando a sessão expirar. O painel não executa esse comando.
-`scripts/start_browser.py` permanece como utilitário opcional para preparação
-e demonstração, com `--executable` para indicar o Brave.
+O perfil da automação é separado do perfil pessoal. Não são copiados cookies
+ou credenciais de outras janelas. Para o banco padrão, fica em
+`runtime/state-browser-profile/`. Bancos com nomes diferentes têm perfis
+próprios (por exemplo, `runtime/demo-browser-profile/` para `runtime/demo.db`).
+Não apague esse diretório se quiser manter o login. Não abra simultaneamente
+outro Chrome com o mesmo perfil.
 
 **Pausar** termina a operação do processo atual e aguarda entre processos.
-**Cancelar** encerra no próximo limite seguro e preserva as abas restantes.
-Não encerre à força o worker durante um envio. Uma sessão expirada pausa o
-worker: faça login no navegador e clique em **Retomar**; valores relidos exigem
+**Cancelar** encerra o processamento no próximo limite seguro e mantém o
+navegador aberto. **Encerrar navegador** cancela no limite seguro e fecha
+somente o Chrome que a aplicação abriu, preservando seu perfil. Não encerre
+à força o worker durante um envio. Sessão expirada pausa o processamento:
+entre novamente na mesma janela e clique em **Retomar**. Dados relidos exigem
 nova conferência.
 
-Um erro de processo não bloqueia os demais. O número e o motivo aparecem no
-painel, e sua aba fica aberta. Corrija no eproc e clique em **Resolvido
-manualmente**, ou em **Ignorar**. MINUTAR_PENDENTE significa que a intimação
-já ocorreu e somente a minuta precisa ser resolvida; não reenviar.
+Um erro de processo não bloqueia os demais. Corrija no eproc e clique em
+**Resolvido manualmente**, ou em **Ignorar**. MINUTAR_PENDENTE significa que
+já houve intimação e falta somente resolver a minuta; não reenviar.
+
+### Modo avançado: navegador já aberto
+
+A opção **Navegador já aberto (avançado)** mantém compatibilidade com a
+integração anterior. Somente essa opção exige CDP em uma sessão já aberta.
+Ela procura abas existentes por **Procurar aba aberta**, com porta manual
+opcional. Não é necessária para o fluxo padrão acima. Nesse modo, o worker
+não fecha o navegador do usuário.
 
 ## Estado, privacidade e recuperação
 
@@ -126,12 +117,12 @@ já ocorreu e somente a minuta precisa ser resolvida; não reenviar.
 - Auditoria em UTC exportável em CSV; inclui números e dados de benefício.
   Banco, logs, perfil do navegador, backups e exportações são sensíveis e devem
   ficar no computador autorizado. SQLite não é criptografado.
-- O painel mostra erros se o CDP não estiver disponível ou a lista não estiver
-  aberta. A conexão CDP fica restrita ao endereço HTTP de loopback.
+- O painel indica falhas de abertura do navegador e ausência da lista.
+  No modo avançado, informa falhas de CDP; esse acesso fica restrito ao loopback.
 - Um worker morto é detectado no painel. Se uma execução não puder ser
   recuperada, seus registros e eventuais reservas de envio são preservados.
 
-## Demonstração sem eproc
+## Demonstração sem eproc (modo avançado de teste)
 
 Com o ambiente ativado, execute cada comando em um terminal:
 
@@ -167,7 +158,8 @@ python -m pytest -q
 Os testes exercitam regras, extração PDF/HTML, máscaras, preservação dos campos
 fora de escopo, conferência da UI, fila, envio simulado, confirmação/validação,
 minuta, aprovação transacional, pausa/cancelamento, prevenção de reenvio e
-worker separado conectado por CDP ao Chromium local. Os cliques de envio real
+worker separado conectado por CDP ao Chromium local e navegador gerenciado
+com perfil persistente, fechamento/reabertura e restauração de login sintético. Os cliques de envio real
 nos testes atingem exclusivamente o servidor sintético.
 
 Se não houver Chromium do sistema, execute `python -m playwright install
@@ -182,7 +174,8 @@ Há também amostras HTML sintéticas versionadas, sem dados pessoais.
 
 ## Limites de validação
 
-O fluxo foi validado em formulário/simulador local e em Chromium por CDP.
+O fluxo foi validado em formulário/simulador local, Chromium por CDP e
+Chromium gerenciado com perfil persistente.
 Não foi executado contra uma sessão autenticada do eproc TRF6. A seleção de
 linhas usa a convenção Infra `input[id^='chkInfraItem']`; confirme-a no ambiente
 real. Os seletores de minuta dependem de papel/texto porque não foram mapeados
@@ -202,7 +195,9 @@ OCR, análise de identidade ou chamadas a APIs do eproc.
 - `ceab/extractor.py`, `ceab/rules.py`: extração e regras puras.
 - `ceab/state.py`: SQLite, comandos, aprovação e auditoria.
 - `ceab/selectors.py`, `ceab/eproc.py`: seletores e automação por etapa.
-- `ceab/worker.py`, `worker.py`: execução sequencial por CDP.
+- `ceab/worker.py`, `worker.py`: execução sequencial em navegador gerenciado
+  ou, opcionalmente, por CDP.
+- `ceab/browser_session.py`: abertura do Chrome com perfil persistente.
 - `ceab/discovery.py`: descoberta local de navegadores e abas existentes.
 - `ceab/launcher.py`, `app.py`: subprocesso e painel Streamlit.
 - `ceab/demo.py`, `samples/`, `tests/`: simulador e validação local.
@@ -210,29 +205,13 @@ OCR, análise de identidade ou chamadas a APIs do eproc.
 `selectors.py` fica dentro de `ceab/` para não ocultar o módulo `selectors` da
 biblioteca padrão usado por subprocessos.
 
-### Chrome no Linux: diagnóstico de aba não encontrada
+### Se Chrome do sistema não abrir
 
-O painel agora diferencia conexão CDP indisponível, resposta inválida, falha
-na consulta de abas e Chrome conectado sem uma aba reconhecida do eproc.
-Uma aba com URL inválida não impede reconhecer as outras.
+No Linux, o worker precisa rodar na mesma sessão gráfica do usuário. Um
+Streamlit remoto na nuvem não abre uma janela no seu computador. Confira se
+Chrome/Chromium está instalado. Se estiver usando o navegador fornecido pelo
+Playwright, instale-o com `python -m playwright install chromium`.
 
-No mesmo computador que executa o Streamlit, abra no Chrome:
-`http://127.0.0.1:9222/json/version`. Se houver erro de conexão, não existe
-acesso CDP por esse endereço naquele momento. Confira a porta usada pelo
-Chrome. Para preparar uma instância acessível, execute manualmente:
-
-```bash
-google-chrome --remote-debugging-port=9222 --user-data-dir="$HOME/.ceab-chrome" --disable-popup-blocking
-```
-
-Use `google-chrome-stable` se necessário. Caso esse perfil já esteja aberto
-sem depuração, feche as janelas desse perfil antes de executar o comando.
-O comando não habilita depuração numa janela pessoal que já está aberta;
-as versões atuais do Chrome exigem perfil separado para essa finalidade.
-Mantenha o mesmo perfil `.ceab-chrome` nas próximas execuções.
-
-Quando o endereço de diagnóstico mostrar JSON, abra o eproc nesse Chrome,
-faça login se necessário, deixe a Lista de Processos por Localizador aberta
- e clique em **Procurar aba aberta**. Chrome e Streamlit precisam estar na
-mesma máquina; um Streamlit na nuvem não alcança o Chrome do seu computador
-pelo endereço localhost.
+Feche somente janelas que estiverem usando o perfil da automação antes de
+reabrir. Não remova o perfil ou o banco como tentativa de corrigir falhas:
+isso pode perder o login e as proteções contra reenvio.

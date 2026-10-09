@@ -7,6 +7,7 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlparse
 from .state import ACTIVE
+from .browser_session import find_browser
 
 ROOT = Path(__file__).resolve().parents[1]
 _CHILDREN = {}
@@ -30,9 +31,15 @@ def probe_cdp(url):
         return False,'Chromium não conectado. Inicie o navegador com depuração remota.'
 
 
-def launch(state,test_mode,cdp_url):
-    url = validate_cdp(cdp_url)
-    run = state.create_execution(test_mode,url)
+def launch(state,test_mode,cdp_url=None, *, executable_path=None, start_url=None, headless=False):
+    mode = 'cdp' if cdp_url else 'persistent'
+    previous = state.execution()
+    if previous and previous['browser_open'] and previous['pid'] and worker_alive(previous['pid']):
+        raise ValueError('Encerre o navegador da execução anterior antes de abrir novamente. O perfil e o login serão preservados.')
+    url = validate_cdp(cdp_url) if cdp_url else ''
+    executable = executable_path or find_browser() if mode=='persistent' else None
+    if executable and not Path(executable).is_file(): raise ValueError('Executável do Chrome não encontrado.')
+    run = state.create_execution(test_mode,url,browser_mode=mode,executable_path=executable,start_url=start_url,headless=headless)
     try:
         log_path = state.path.parent / f'worker-{run}.log'
         with log_path.open('a') as log:
@@ -81,7 +88,7 @@ def worker_alive(pid):
 
 def recover_dead_worker(state):
     run = state.execution()
-    if not run or run['status'] not in ACTIVE or not run['pid']: return
+    if not run or (run['status'] not in ACTIVE and not run['browser_open']) or not run['pid']: return
     if not worker_alive(run['pid']):
-        state.execution_update(run['id'],status='ERRO',connected=0,message='Worker interrompido. Abas e registros preservados; tentativas de envio não serão repetidas.')
+        state.execution_update(run['id'],status='ERRO',connected=0,browser_open=0,message='Worker interrompido. Abas e registros preservados; tentativas de envio não serão repetidas.')
         state.log(run['id'],None,'WORKER_INTERROMPIDO',{},'Confira os processos manualmente antes de uma nova execução.')

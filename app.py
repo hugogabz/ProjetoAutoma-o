@@ -13,52 +13,82 @@ state = State()
 recover_dead_worker(state)
 st.title('Requisições CEAB/DJ')
 st.caption('eproc TRF6 · preenchimento assistido com conferência humana · dados mantidos localmente')
-with st.sidebar:
-    st.header('Aproveitar sessão aberta')
+@st.fragment(run_every=2)
+def browser_controls():
     latest = state.execution()
     active = bool(latest and latest['status'] in ACTIVE)
-    if 'browser_choices' not in st.session_state:
-        st.session_state.browser_choices = find_existing_browsers()
-    if st.button('Procurar aba aberta',disabled=active,width='stretch'):
-        st.session_state.browser_choices = find_existing_browsers()
-    choices = st.session_state.browser_choices
-    selected = None
-    if choices:
-        labels = [f"{c['browser']} · porta {urlparse(c['endpoint']).port} · {len(c['tabs'])} aba(s) eproc" for c in choices]
-        index = st.selectbox('Navegador encontrado',range(len(choices)),format_func=lambda i:labels[i],disabled=active)
-        selected = choices[index]
-        st.success('Aba existente encontrada. A sessão desse navegador será reutilizada.')
-        for tab in selected['tabs']: st.caption(tab['title'])
-    with st.expander('Conexão manual / aba não encontrada'):
-        manual = st.checkbox('Informar endereço CDP manualmente',disabled=active)
-        manual_url = st.text_input('Endereço CDP',value='http://localhost:9222',disabled=active)
-        st.caption('Uma aba comum só pode ser controlada se o Chrome tiver sido iniciado com depuração remota. Não é possível habilitar esse acesso em uma sessão já aberta normalmente. O sistema não reinicia o navegador nem abre uma tela de login.')
-    if manual or not selected:
-        diagnosis = diagnose_browser(manual_url)
-        selected = diagnosis['match']
-        if selected:
-            st.success(diagnosis['message'])
-            for tab in selected['tabs']: st.caption(tab['title'])
-        else:
-            st.info('Nenhuma aba do eproc acessível foi encontrada no navegador local.')
-            st.warning(diagnosis['message'])
-            if diagnosis['status']=='CDP_INACESSIVEL':
-                st.caption('No seu Chrome, confira se http://127.0.0.1:9222/json/version abre. Chrome e Streamlit precisam rodar na mesma máquina. Uma sessão comum sem CDP não pode ser assumida depois de aberta.')
-    cdp_url = latest['cdp_url'] if active else selected['endpoint'] if selected else None
-    connected = bool(selected) if not active else probe_cdp(cdp_url)[0]
-    test_mode = st.toggle('Modo teste (não intima)',value=True,disabled=active,help='Intimar e Apenas salvar nunca são clicados neste modo.')
-    if active:
+    browser_open = bool(latest and latest['browser_open'])
+    mode = st.selectbox('Conexão do navegador',('Chrome do sistema (login salvo)','Navegador já aberto (avançado)'),
+                        index=1 if latest and (active or browser_open) and latest['browser_mode']=='cdp' else 0,
+                        disabled=active or browser_open,key='connection_mode')
+    managed = mode=='Chrome do sistema (login salvo)'
+    test_mode = st.toggle('Modo teste (não intima)',value=True,disabled=active or browser_open,help='Intimar e Apenas salvar nunca são clicados neste modo.')
+    if active or browser_open:
         st.caption('Modo desta execução: '+('TESTE' if latest['test_mode'] else 'ENVIO REAL'))
     real_ack = False
     if not test_mode:
         st.warning('Envio real: processos conferidos serão intimados no eproc.')
         real_ack = st.checkbox('Quero permitir envio real após a conferência de cada processo.')
-    if st.button('Iniciar',type='primary',disabled=active or not connected or (not test_mode and not real_ack),width='stretch'):
-        try:
-            launch(state,test_mode,cdp_url)
-            st.rerun()
-        except (ValueError,OSError) as exc: st.error(str(exc))
-    st.caption('Deixe aberta a Lista de Processos por Localizador (até 25) na sessão em que você já está autenticado.')
+    permitted = test_mode or real_ack
+    if managed:
+        st.header('Chrome com login salvo')
+        st.caption('O sistema abre uma janela própria e reutiliza seu perfil nas próximas sessões. Não é necessário ativar depuração ou informar uma porta.')
+        st.caption('Na primeira abertura, faça login no eproc. Se a sessão expirar, entre novamente no mesmo perfil.')
+        if st.button('Abrir Chrome',disabled=active or browser_open or not permitted,width='stretch'):
+            try:
+                launch(state,test_mode)
+                st.rerun()
+            except (ValueError,OSError) as exc: st.error(str(exc))
+        if browser_open:
+            st.success('Navegador aberto com o perfil salvo.')
+        if st.button('Iniciar processamento',type='primary',disabled=not active or not browser_open or bool(latest and latest['queue_started']),width='stretch'):
+            try:
+                state.command(latest['id'],'iniciar')
+                st.rerun()
+            except ValueError as exc: st.error(str(exc))
+        if browser_open and st.button('Encerrar navegador',width='stretch'):
+            try:
+                state.command(latest['id'],'fechar_navegador')
+                st.rerun()
+            except ValueError as exc: st.error(str(exc))
+    else:
+        st.header('Aproveitar sessão aberta')
+        if 'browser_choices' not in st.session_state:
+            st.session_state.browser_choices = find_existing_browsers()
+        if st.button('Procurar aba aberta',disabled=active,width='stretch'):
+            st.session_state.browser_choices = find_existing_browsers()
+        choices = st.session_state.browser_choices
+        selected = None
+        if choices:
+            labels = [f"{c['browser']} · porta {urlparse(c['endpoint']).port} · {len(c['tabs'])} aba(s) eproc" for c in choices]
+            index = st.selectbox('Navegador encontrado',range(len(choices)),format_func=lambda i:labels[i],disabled=active)
+            selected = choices[index]
+            st.success('Aba existente encontrada. A sessão desse navegador será reutilizada.')
+            for tab in selected['tabs']: st.caption(tab['title'])
+        with st.expander('Conexão manual / aba não encontrada'):
+            manual = st.checkbox('Informar endereço CDP manualmente',disabled=active)
+            manual_url = st.text_input('Endereço CDP',value='http://localhost:9222',disabled=active)
+            st.caption('Somente este modo avançado exige que o Chrome existente tenha sido iniciado com depuração remota.')
+        if manual or not selected:
+            diagnosis = diagnose_browser(manual_url)
+            selected = diagnosis['match']
+            if selected:
+                st.success(diagnosis['message'])
+                for tab in selected['tabs']: st.caption(tab['title'])
+            else:
+                st.info('Nenhuma aba do eproc acessível foi encontrada no navegador local.')
+                st.warning(diagnosis['message'])
+        cdp_url = latest['cdp_url'] if active else selected['endpoint'] if selected else None
+        connected = bool(selected) if not active else probe_cdp(cdp_url)[0]
+        if st.button('Iniciar',type='primary',disabled=active or not connected or not permitted,width='stretch'):
+            try:
+                launch(state,test_mode,cdp_url)
+                st.rerun()
+            except (ValueError,OSError) as exc: st.error(str(exc))
+    st.caption('Deixe aberta a Lista de Processos por Localizador (até 25) antes de iniciar o processamento.')
+
+with st.sidebar:
+    browser_controls()
 
 if 'screen' not in st.session_state: st.session_state.screen = 'Painel'
 screen = st.radio('Tela',('Painel','Conferir formulário'),horizontal=True,key='screen')
