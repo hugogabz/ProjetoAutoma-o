@@ -305,3 +305,78 @@ def test_queue_row_changed_after_snapshot_is_not_opened(context,site):
     with pytest.raises(AutomationError,match='listagem mudou'):
         adapter.open_process(items[0])
     assert len(context.pages)==1
+
+
+@pytest.mark.parametrize('kind',['CONCESSAO','RESTABELECIMENTO'])
+def test_native_eproc_option_labels_with_prefix_and_repeated_locator(context,site,kind):
+    from ceab.rules import RPV
+    url,_=site
+    page=context.new_page()
+    page.goto(url+'/form?num_processo='+B.process)
+    benefit=replace(B,kind=kind)
+    event_text={
+        'CONCESSAO':'Expedida/certificada a intimação eletrônica - Requisição - Cumprimento - Implantar Benefício',
+        'RESTABELECIMENTO':'Expedida/certificada a intimação eletrônica - Requisição - Cumprimento - Restabelecer Benefício por Incapacidade ou Assistencial',
+    }[kind]
+    page.locator(f'#selEventoJudicial option[value="{EVENTS[kind][0]}"]').evaluate('(el,text)=>el.textContent=text',event_text)
+    page.locator(f'#selNovoLocalizador option[value="{RPV[0]}"]').evaluate("el=>el.textContent='Expedir RPV - Expedir RPV'")
+    Eproc(context).fill(page,benefit,False)
+    assert page.locator(S.FIELDS['dib']).input_value()==benefit.dib
+
+
+@pytest.mark.parametrize('filename,expected_kind',[
+ ('exemplo1.pdf','RESTABELECIMENTO'),('exemplo2.pdf','CONCESSAO')])
+def test_real_private_pdf_through_browser_wrapper_and_native_form(context,site,filename,expected_kind):
+    from pathlib import Path
+    from ceab.extractor import extract_pdf
+    from ceab.rules import decide,RPV
+    path=Path('samples/private')/filename
+    if not path.exists(): pytest.skip('PDF pessoal não distribuído.')
+    expected=extract_pdf(path.read_bytes())
+    assert expected.kind==expected_kind
+    url,counts=site
+    counts['pdf_path']=str(path.resolve())
+    process=context.new_page()
+    process.goto(url+'/process?num_processo='+expected.process)
+    adapter=Eproc(context)
+    benefit,label=adapter.read_document(process,expected.process)
+    assert benefit==expected
+    adapter.fill(process,benefit)
+    assert process.locator(S.FIELDS['dib']).input_value()==expected.dib
+    assert process.locator(S.FIELDS['dip']).input_value()==expected.dip
+    assert process.locator(S.FIELDS['dcb']).input_value()==(expected.dcb or '')
+    assert process.locator(S.FIELDS['nb']).input_value()==(expected.nb or '')
+    assert process.locator(S.EVENT).input_value()==decide(expected).event
+    assert process.locator(S.DESTINATION).input_value()==RPV[0]
+    assert adapter.submit(process,benefit,True) is False
+    assert counts['sent']==0 and counts['minute']==0
+    assert len(context.pages)==1
+
+
+@pytest.mark.parametrize('wrong_text',[
+ 'Expedir RPV - Para Liquidar',
+ 'Expedir RPV - Expedir RPV - Para Remeter Turma',
+])
+def test_similar_native_locator_names_are_rejected(context,site,wrong_text):
+    from ceab.rules import RPV
+    url,_=site
+    page=context.new_page()
+    page.goto(url+'/form?num_processo='+B.process)
+    page.locator(f'#selNovoLocalizador option[value="{RPV[0]}"]').evaluate('(el,text)=>el.textContent=text',wrong_text)
+    with pytest.raises(AutomationError,match='Opção divergente em #selNovoLocalizador'):
+        Eproc(context).fill(page,B,False)
+
+
+def test_missing_table_error_identifies_selected_document(context,site,monkeypatch):
+    url,counts=site
+    counts['missing_table']=True
+    monkeypatch.setattr(S,'NAVIGATION_TIMEOUT',1000)
+    process=context.new_page()
+    process.goto(url+'/process?num_processo='+B.process)
+    records=[]
+    adapter=Eproc(context,lambda n,a,v=None,r='OK':records.append((a,v)))
+    with pytest.raises(AutomationError,match='PROACORDO · evento 26 · documento 1:') as exc:
+        adapter.read_document(process,B.process)
+    assert exc.value.code=='DOCUMENTO_ILEGIVEL'
+    assert ('DOCUMENTO_SELECIONADO',{'name':'PROACORDO','event':26,'doc':1}) in records
+    assert len(context.pages)==1 and not process.is_closed()

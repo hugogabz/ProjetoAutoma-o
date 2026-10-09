@@ -251,7 +251,9 @@ class Eproc:
         if not selected:
             raise AutomationError('DOCUMENTO_NAO_ENCONTRADO','Proposta de acordo não encontrada entre os documentos do processo.')
         candidate = max(selected,key=lambda c:c['event'])
-        return urljoin(page.url,candidate['href']), f"{candidate['name'] or 'Proposta'} · evento {candidate['event']} · documento 1"
+        label = f"{candidate['name'] or 'Proposta'} · evento {candidate['event']} · documento 1"
+        self.audit(number,'DOCUMENTO_SELECIONADO',{'name':candidate['name'],'event':candidate['event'],'doc':1},label)
+        return urljoin(page.url,candidate['href']),label
 
     def read_document(self,page,number):
         assert_session(page)
@@ -310,6 +312,8 @@ class Eproc:
                     if exc.code != 'DOCUMENTO_ILEGIVEL': raise
                     return self.read_rendered_document(document,number,label,exc)
             raise AutomationError('DOCUMENTO_ILEGIVEL','Documento não pôde ser lido.')
+        except AutomationError as exc:
+            raise AutomationError(exc.code,f'{label}: {exc}') from exc
         finally:
             document.close()
             page.bring_to_front()
@@ -360,8 +364,17 @@ class Eproc:
     def select_verified(self,page,selector,value,text):
         locator = locate(page,selector)
         locator.select_option(value=value)
+        self.verify_option(locator,selector,value,text)
+
+    def verify_option(self,locator,selector,value,text):
         selected_text = locator.locator('option:checked').inner_text()
-        if locator.input_value() != value or normalize(selected_text) != normalize(text):
+        accepted = {normalize(text)}
+        if selector == S.EVENT:
+            accepted.add(normalize('Expedida/certificada a intimação eletrônica - '+text))
+        elif selector == S.DESTINATION:
+            accepted.add(normalize(text+' - '+text))
+        # Valores e textos completos conhecidos: nomes parecidos não bastam.
+        if locator.input_value() != value or normalize(selected_text) not in accepted:
             raise AutomationError('PREENCHIMENTO_DIVERGENTE',f'Opção divergente em {selector}.')
 
     def fill_verified(self,locator,value,field):
@@ -406,8 +419,7 @@ class Eproc:
         decision = decide(benefit)
         for selector,value,text in [(S.EVENT,decision.event,decision.event_text),(S.DESTINATION,decision.destination,decision.destination_text)]:
             locator = locate(page,selector)
-            if locator.input_value() != value or normalize(locator.locator('option:checked').inner_text()) != normalize(text):
-                raise AutomationError('PREENCHIMENTO_DIVERGENTE','Evento ou localizador divergiu da aprovação.')
+            self.verify_option(locator,selector,value,text)
         if not locate(page,S.CONFIRM_DOCUMENTS).is_checked():
             raise AutomationError('PREENCHIMENTO_DIVERGENTE','Confirmação de documentos sugeridos desmarcada.')
         block = locate(page,S.BENEFIT)

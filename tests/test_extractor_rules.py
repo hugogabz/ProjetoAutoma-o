@@ -128,3 +128,13 @@ Honorários R$ 0,00'''
     values,amount=text_values(text)
     b=build_benefit(text,values,amount)
     assert b.dib=='22/04/2025' and b.amount==Decimal('100')
+
+
+@pytest.mark.parametrize('kind',[
+ 'JUD – IMPLANTAR BENEFICIO – AUXILIO-DOENCA',
+ 'JUD – IMPLANTAR BENEFICIO – APOSENTADORIA POR INVALIDEZ',
+])
+def test_jud_types_reported_by_user_remain_outside_prd(kind):
+    with pytest.raises(AutomationError) as exc:
+        extract_html(HTML.replace('Restabelecimento</td>',kind+'</td>'))
+    assert exc.value.code=='TIPO_DESCONHECIDO'

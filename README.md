@@ -244,3 +244,26 @@ Tipo, DIB/Restabelecimento e DIP mesmo quando o título é diferente. Se houver
 mais de uma tabela compatível, exige revisão manual. HTML carregado por
 JavaScript é lido do conteúdo renderizado no navegador; PDFs sem texto,
 imagens digitalizadas e formatos sem esses campos exigem revisão manual.
+
+
+## Conferência do PRD e mensagens de erro
+
+Os nomes de arquivo dos dois PDFs enviados estão invertidos em relação à
+seção 10 do PRD. O conteúdo de `exemplo1.pdf` é restabelecimento; o de
+`exemplo2.pdf` é concessão. Os testes conferem os campos reais e também fazem
+leitura pelo iframe, download do PDF e preenchimento com os textos completos
+das opções do eproc, sem clicar em Intimar.
+
+A verificação aceita o prefixo nativo `Expedida/certificada a intimação
+eletrônica -` no evento e a repetição do nome no localizador (por exemplo,
+`Expedir RPV - Expedir RPV`). Os valores continuam obrigatórios e os textos
+precisam corresponder às formas completas conhecidas; nomes parecidos não
+são aceitos.
+
+`TIPO_DESCONHECIDO` para `JUD – IMPLANTAR BENEFICIO – ...` segue o PRD:
+somente Concessão e Restabelecimento são suportados. `DATA_AUSENTE_OU_INVALIDA`
+exige conferir DIB e DIP nas células de valor, sem buscar datas nas notas.
+`DOCUMENTO_ILEGIVEL` com tabela ausente exige conferir a proposta escolhida.
+O erro e o log agora identificam nome do documento, evento e sequência, sem
+registrar links ou tokens de sessão. Não converter tipos nem inventar datas
+para liberar o envio. Processos com falha continuam sem envio.

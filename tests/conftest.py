@@ -17,8 +17,8 @@ def proposal(number,amount=True,invalid=False):
 
 
 def form(number):
-    event_options = ''.join(f'<option value="{v}">{t}</option>' for v,t in EVENTS.values())
-    destination_options = ''.join(f'<option value="{v}">{t}</option>' for v,t in (RPV,CALCULATION,ARCHIVE))
+    event_options = ''.join(f'<option value="{v}">Expedida/certificada a intimação eletrônica - {t}</option>' for v,t in EVENTS.values())
+    destination_options = ''.join(f'<option value="{v}">{t} - {t}</option>' for v,t in (RPV,CALCULATION,ARCHIVE))
     return f'''<html><body><h1>Processo {number}</h1>
     <select id="selEventoJudicial"><option value="null"></option>{event_options}</select>
     <input type="checkbox" id="chkSelEventosDocTodos">
@@ -59,8 +59,18 @@ def site():
                 content = f'<h1>{number}</h1><table><tr><td>Proposta de conciliação</td><td><a class="infraLinkDocumento" data-nome="PROACORDO" href="/wrapper?num_processo={number}&SeqDocumento=1&numSeqEvento=26" target="_blank">PROACORDO1</a></td></tr></table><a class="infraButton" href="/form?num_processo={number}">Requisição CEAB/DJ</a><a href="/minute?num_processo={number}">Minutar</a>'
             elif parsed.path == '/wrapper':
                 content = f'<iframe id="conteudoIframe" name="superior" src="/proposal?num_processo={number}"></iframe>'
+            elif parsed.path == '/proposal' and counts.get('pdf_path'):
+                from pathlib import Path
+                self.send_response(200)
+                body=Path(counts['pdf_path']).read_bytes()
+                self.send_header('Content-Type','application/pdf')
+                self.send_header('Content-Length',str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             elif parsed.path == '/proposal':
                 content = proposal(number,amount=number != NUMBERS[1],invalid=number==NUMBERS[2])
+                if counts.get('missing_table'): content='<html><body>Documento sintético sem tabela de cumprimento.</body></html>'
                 if counts.get('dynamic'):
                     content = '<html><body>Carregando documento...<script>setTimeout(()=>document.body.innerHTML='+json.dumps(content)+',150)</script></body></html>'
             elif parsed.path == '/form': content = form(number)

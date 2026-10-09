@@ -2,7 +2,7 @@
 
 Ambiente testado: Python 3.12, Chromium 151 e dependências de `requirements.lock`.
 
-- `python -m pytest -q`: **78 testes aprovados, nenhum pulado**, com as amostras
+- `python -m pytest -q`: **87 testes aprovados, nenhum pulado**, com as amostras
   pessoais disponíveis no diretório local ignorado `samples/private/`.
 - Novo modo padrão: worker abre navegador gerenciado com perfil persistente,
   espera comando explícito antes de processar e não exige uma porta CDP.
@@ -59,5 +59,27 @@ Na operação local, o modo padrão abre uma janela na sessão gráfica do usuá
 A UI foi testada pelo Streamlit AppTest, sem Playwright no processo da UI.
 
 Os PDFs pessoais, bancos, logs, credenciais e perfis de navegador não fazem parte
-do pacote de distribuição. Sem os PDFs, seus quatro testes serão pulados;
+do pacote de distribuição. Sem os PDFs, seus seis testes serão pulados;
 os demais usam amostras sintéticas versionadas.
+
+
+Revisão contra o PRD e os novos anexos: os bytes dos dois PDFs enviados são
+idênticos aos das amostras privadas testadas. Os nomes estão invertidos em
+relação à seção 10 do PRD; os resultados seguem o conteúdo de cada arquivo.
+Os campos extraídos batem com o conteúdo: restabelecimento com DIB 03/07/2026,
+DIP 01/09/2026, DCB 30/09/2028 e valor 2422.26; concessão com DIB 22/04/2025,
+DIP 01/09/2026, DCB ausente e valor 26561.97. Ambos têm destino Expedir RPV.
+
+Foi reproduzido o PREENCHIMENTO_DIVERGENTE nos eventos nativos do HTML fornecido.
+A validação agora aceita as formas completas conhecidas dos eventos e dos
+localizadores repetidos, incluindo a verificação antes do envio. As páginas
+sintéticas e o simulador passaram a reproduzir esses textos nativos. Testes
+rejeitam localizadores de nome semelhante. Os PDFs reais foram exercitados
+pelo fluxo de navegador, iframe, download, extração e preenchimento, seguido
+de envio simulado. Nenhum envio foi realizado no eproc real.
+
+Erros de leitura agora identificam documento, evento e sequência; ausência de
+tabela tem teste específico. Os tipos JUD relatados permanecem bloqueados com
+TIPO_DESCONHECIDO, conforme o PRD. Isso não confirma que as outras propostas
+que falharam sejam iguais aos dois exemplos; sua análise exige conferir o
+documento escolhido e os campos disponíveis.
