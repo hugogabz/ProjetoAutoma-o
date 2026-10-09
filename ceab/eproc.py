@@ -122,24 +122,55 @@ class Eproc:
         if not all(checks.nth(i).is_checked() for i in range(count)):
             raise AutomationError('PREENCHIMENTO_DIVERGENTE','A seleção não marcou todas as linhas; confira a lista manualmente.')
         self.audit(None,'FILA_SELECIONADA',{'count':count},'OK')
+        # O eproc pode repetir o mesmo link no topo e no rodapé da lista.
+        # Preferir o frame da lista, com suporte ao link fora desse frame.
+        frames = [frame]+[other for other in page.frames if other != frame]
+        candidates = [f.locator(S.QUEUE_OPEN).filter(visible=True) for f in frames]
+        opener = next((links.first for links in candidates if links.count()),candidates[0].first)
+        try: opener.wait_for(state='visible',timeout=S.ELEMENT_TIMEOUT)
+        except PlaywrightTimeout as exc:
+            raise AutomationError('ELEMENTO_NAO_ENCONTRADO','Link Abrir os processos selecionados em abas/janelas não está visível na lista.') from exc
         opened = []
+        dialogs = []
+        script_errors = []
         def capture(new_page): opened.append(new_page)
+        def handle_dialog(dialog):
+            dialogs.append((dialog.type,dialog.message))
+            # Iniciar autoriza abrir abas. Esta permissão não se estende a
+            # confirmações de envio ou aos demais controles do eproc.
+            if dialog.type == 'confirm': dialog.accept()
+            else: dialog.dismiss()
+            self.audit(None,'DIALOGO_ABERTURA',{'type':dialog.type},
+                       'ACEITO' if dialog.type == 'confirm' else 'DISPENSADO')
+        def handle_script_error(error): script_errors.append(True)
         self.context.on('page',capture)
+        page.on('dialog',handle_dialog)
+        page.on('pageerror',handle_script_error)
         try:
-            locate(page,S.QUEUE_OPEN).click()
+            opener.click()
             self.audit(None,'ABRIR_PROCESSOS_SELECIONADOS',{'count':count},'CLICADO')
             deadline = time.monotonic()+60
             while len(opened) < count:
+                if any(kind != 'confirm' for kind,_ in dialogs) or script_errors: break
                 remaining = deadline-time.monotonic()
                 if remaining <= 0: break
-                try: self.context.wait_for_event('page',timeout=remaining*1000)
-                except PlaywrightTimeout: break
+                try: self.context.wait_for_event('page',timeout=min(remaining*1000,500))
+                except PlaywrightTimeout: continue
         finally:
             self.context.remove_listener('page',capture)
+            page.remove_listener('dialog',handle_dialog)
+            page.remove_listener('pageerror',handle_script_error)
         if len(opened) != count:
             self.audit(None,'ABAS_ABERTAS',{'expected':count,'actual':len(opened)},'Quantidade divergente; seguindo com as abertas.')
         if not opened:
-            raise AutomationError('ELEMENTO_NAO_ENCONTRADO','Nenhum processo abriu. Libere os pop-ups no Chromium.')
+            alerts = [message for kind,message in dialogs if kind == 'alert']
+            if alerts:
+                raise AutomationError('ELEMENTO_NAO_ENCONTRADO','O eproc interrompeu a abertura: '+'; '.join(alerts))
+            if script_errors:
+                raise AutomationError('ELEMENTO_NAO_ENCONTRADO','A função de abertura do eproc apresentou um erro de JavaScript. Recarregue a lista e tente novamente.')
+            if any(kind == 'prompt' for kind,_ in dialogs):
+                raise AutomationError('ELEMENTO_NAO_ENCONTRADO','O eproc pediu uma entrada manual durante a abertura. Confira a lista no navegador.')
+            raise AutomationError('ELEMENTO_NAO_ENCONTRADO','O link de abertura foi clicado, mas nenhuma aba abriu. Confira os pop-ups e se há processos selecionados na lista do eproc.')
         return opened[:count]
 
     def identify(self,page):

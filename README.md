@@ -52,6 +52,9 @@ não expõe uma porta CDP para você configurar.
    Clique em **Iniciar processamento**. O sistema marca **100** na paginação,
    seleciona as linhas e clica em **Abrir os processos selecionados em abas/janelas**.
    Aguarda cada aba carregar, lê e preenche um processo, e segue para o próximo.
+   Confirmações dessa abertura são aceitas automaticamente. Se o eproc
+   repetir o link no topo e no rodapé, somente um deles é clicado. Alertas
+   ou falhas de JavaScript na abertura aparecem no painel.
    Se uma aba falhar, registra o problema e continua com as demais.
    Se a lista não estiver disponível,
    o painel explica o problema e permite ajustar a página e iniciar novamente.

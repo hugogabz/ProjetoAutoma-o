@@ -132,6 +132,7 @@ class Worker:
             return True
         if not self.queue_loaded:
             try:
+                self.state.execution_update(self.run,status='EXECUTANDO',message='Ajustando a lista para 100 processos, selecionando as linhas e abrindo as abas. Aguarde a confirmação da abertura.')
                 pages = self.adapter.open_queue()
             except AutomationError as exc:
                 if exc.code != 'SESSAO_EXPIRADA':

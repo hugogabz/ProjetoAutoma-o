@@ -2,7 +2,7 @@
 
 Ambiente testado: Python 3.12, Chromium 151 e dependências de `requirements.lock`.
 
-- `python -m pytest -q`: **59 testes aprovados, nenhum pulado**, com as amostras
+- `python -m pytest -q`: **65 testes aprovados, nenhum pulado**, com as amostras
   pessoais disponíveis no diretório local ignorado `samples/private/`.
 - Novo modo padrão: worker abre navegador gerenciado com perfil persistente,
   espera comando explícito antes de processar e não exige uma porta CDP.
@@ -13,6 +13,12 @@ Ambiente testado: Python 3.12, Chromium 151 e dependências de `requirements.loc
 - Paginação alterada com recarga para 100; clique no link fornecido abre 100
   abas locais, com 100 números distintos. Seleção parcial não inverte linhas
   previamente marcadas.
+- Regressão reproduzida no código anterior: confirmação de abertura cancelada
+  automaticamente impedia todas as abas. Agora a confirmação é aceita apenas
+  durante o clique de abertura; confirmações posteriores continuam sem aceite.
+- Links de abertura repetidos não causam ambiguidade, e o link pode ficar fora
+  do frame das linhas. Alertas imediatos ou atrasados e falhas de JavaScript
+  são relatados sem aguardar 60 segundos por abas que não abrirão.
 - Aba aberta inicialmente em about:blank aguarda navegação atrasada. Worker
   lê a primeira antes de identificar a próxima, registra uma aba com falha
   e continua para a seguinte.

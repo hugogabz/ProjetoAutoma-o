@@ -195,3 +195,73 @@ def test_partial_selection_opens_all_without_inverting_checked_rows(context,site
     queue.locator(S.QUEUE_ROWS).nth(1).uncheck()
     assert len(Eproc(context).open_queue())==3
     assert all(queue.locator(S.QUEUE_ROWS).nth(i).is_checked() for i in range(3))
+
+
+
+def test_queue_accepts_opening_confirmation_and_removes_handler(context,site):
+    url,_=site
+    queue=context.new_page()
+    queue.goto(url+'/queue')
+    queue.evaluate("""() => {
+        const open=window.abreProcessosSelecionadosEmAbas;
+        window.abreProcessosSelecionadosEmAbas=()=>{
+            if(confirm('Abrir os processos selecionados em abas/janelas?')) open();
+        };
+    }""")
+    pages=Eproc(context).open_queue()
+    assert len(pages)==3
+    # A permissão para confirmar termina junto com a abertura da fila.
+    assert queue.evaluate("confirm('Outra operação?')") is False
+
+
+@pytest.mark.parametrize('delayed',[False,True])
+def test_queue_alert_is_reported_without_waiting_for_nonexistent_popups(context,site,delayed):
+    url,_=site
+    queue=context.new_page()
+    queue.goto(url+'/queue?count=1')
+    queue.evaluate("""delayed=>{window.abreProcessosSelecionadosEmAbas=()=>{
+        const notify=()=>alert('Selecione processos válidos.');
+        if(delayed) setTimeout(notify,50); else notify();
+    }}""",delayed)
+    with pytest.raises(AutomationError,match='Selecione processos válidos'):
+        Eproc(context).open_queue()
+    assert len(context.pages)==1
+    assert queue.evaluate("confirm('Outra operação?')") is False
+
+
+def test_duplicate_open_links_do_not_stop_after_selecting(context,site):
+    url,_=site
+    queue=context.new_page()
+    queue.goto(url+'/queue')
+    queue.evaluate("""()=>{
+        const link=document.querySelector('a[onclick*=abreProcessosSelecionadosEmAbas]');
+        document.body.appendChild(link.cloneNode(true));
+    }""")
+    assert len(Eproc(context).open_queue())==3
+
+
+
+def test_queue_javascript_error_reports_opening_failure(context,site):
+    url,_=site
+    queue=context.new_page()
+    queue.goto(url+'/queue?count=1')
+    queue.evaluate("()=>{window.abreProcessosSelecionadosEmAbas=()=>{throw new Error('Falha sintética')}}")
+    with pytest.raises(AutomationError,match='erro de JavaScript'):
+        Eproc(context).open_queue()
+    assert len(context.pages)==1
+
+
+
+def test_open_link_outside_frame_of_queue_rows(context,site):
+    url,_=site
+    queue=context.new_page()
+    queue.goto(url+'/queue')
+    queue.evaluate("""()=>{
+        const controls=[...document.querySelectorAll('#optPaginacao100,#lnkInfraCheck,input[type=checkbox]')];
+        const iframe=document.createElement('iframe');
+        iframe.srcdoc=controls.map(el=>el.outerHTML).join('');
+        controls.forEach(el=>el.remove());
+        document.body.appendChild(iframe);
+    }""")
+    queue.frame_locator('iframe').locator(S.QUEUE_ROWS).first.wait_for()
+    assert len(Eproc(context).open_queue())==3
