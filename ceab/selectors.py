@@ -1,4 +1,6 @@
 """Seletores centralizados. Dentro do pacote para não ocultar selectors da stdlib."""
+QUEUE_PAGE_SIZE = '#optPaginacao100'
+QUEUE_LIMIT = 100
 QUEUE_TOGGLE = '#lnkInfraCheck'
 QUEUE_OPEN = "a[onclick*='abreProcessosSelecionadosEmAbas']"
 QUEUE_ROWS = "input[type='checkbox'][id^='chkInfraItem']"

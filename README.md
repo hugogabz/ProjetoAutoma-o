@@ -48,8 +48,12 @@ não expõe uma porta CDP para você configurar.
 3. A janela abre o eproc. Na primeira utilização, faça login manualmente
    nessa janela (inclusive certificado/token quando necessário). O painel
    espera; não tenta fazer login nem iniciar a fila automaticamente.
-4. Abra **Lista de Processos por Localizador** (até 25 processos) nessa janela.
-   Clique em **Iniciar processamento**. Se a lista não estiver disponível,
+4. Abra **Lista de Processos por Localizador** nessa janela.
+   Clique em **Iniciar processamento**. O sistema marca **100** na paginação,
+   seleciona as linhas e clica em **Abrir os processos selecionados em abas/janelas**.
+   Aguarda cada aba carregar, lê e preenche um processo, e segue para o próximo.
+   Se uma aba falhar, registra o problema e continua com as demais.
+   Se a lista não estiver disponível,
    o painel explica o problema e permite ajustar a página e iniciar novamente.
 5. Em **Conferir formulário**, revise a proposta e as abas, edite DIB/DIP/DCB
    se necessário, marque **Conferi os dados e autorizo o envio** e clique em
@@ -60,10 +64,12 @@ não expõe uma porta CDP para você configurar.
 7. Ao terminar ou cancelar, o navegador continua aberto para conferência.
    Clique em **Encerrar navegador** (ou feche a janela) para encerrar com
    gravação do perfil no disco. Para outra execução, clique em **Abrir Chrome**:
-   o mesmo perfil será usado, sem apagar seu login ou suas preferências.
+   o mesmo perfil **CEAB/DJ** será usado, sem apagar seu login ou suas preferências.
+   As abas do eproc são restauradas sem redirecioná-las à página inicial.
 
 **O login depende da validade da sessão do eproc.** O perfil conserva cookies
-(incluindo a restauração de sessão do Chrome), armazenamento local e dados do
+(incluindo a restauração de sessão do Chrome), armazenamento local,
+armazenamento da aba restaurada e dados do
 navegador entre aberturas. Não evita expiração da sessão, exigência de novo
 certificado/token, logout ou políticas do servidor. Se o eproc pedir login
 novamente, entre na mesma janela e continue.

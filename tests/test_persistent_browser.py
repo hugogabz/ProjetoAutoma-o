@@ -20,7 +20,8 @@ def test_profile_preserves_session_cookie_and_storage_across_reopening(site,tmp_
         second=open_persistent(pw,config)
         try:
             assert any(c['name']=='login-sintetico' and c['value']=='sessao-existente' for c in second.cookies())
-            assert second.pages[0].evaluate("localStorage.getItem('preferencia-sintetica')")=='preservada'
+            restored=next(p for p in second.pages if p.url==url+'/queue')
+            assert restored.evaluate("localStorage.getItem('preferencia-sintetica')")=='preservada'
             assert not (tmp_path/'profile'/'DevToolsActivePort').exists()
         finally: second.close()
 
@@ -93,6 +94,7 @@ def test_legacy_database_is_migrated_without_losing_history(tmp_path):
 def test_failed_initial_navigation_keeps_browser_available_for_manual_login(tmp_path):
     from playwright.sync_api import Error
     class Page:
+        url='about:blank'
         def goto(self,*args,**kwargs): raise Error('Falha de rede sintética.')
     class Context:
         pages=[Page()]
@@ -102,3 +104,24 @@ def test_failed_initial_navigation_keeps_browser_available_for_manual_login(tmp_
     class Playwright:
         chromium=Chromium()
     assert open_persistent(Playwright(),{'profile_path':str(tmp_path/'profile'),'headless':True,'start_url':'https://example.invalid'}) is context
+
+
+def test_reopening_restores_authenticated_tab_without_visiting_start_url(site,tmp_path):
+    url,_=site
+    config={'profile_path':str(tmp_path/'profile'),'executable_path':shutil.which('chromium'),
+            'headless':1,'start_url':url+'/queue'}
+    with sync_playwright() as pw:
+        first=open_persistent(pw,config)
+        first.add_cookies([{'name':'login-sintetico','value':'sessao-existente','url':url}])
+        target=url+'/process?num_processo=00000000120264060001'
+        first.pages[0].goto(target)
+        first.pages[0].evaluate("sessionStorage.setItem('autenticacao-sintetica','ativa')")
+        first.close()
+        # A URL inicial representa um portal que solicitaria login novamente.
+        second=open_persistent(pw,{**config,'start_url':url+'/login'})
+        try:
+            restored=next(p for p in second.pages if p.url==target)
+            assert restored.evaluate("sessionStorage.getItem('autenticacao-sintetica')")=='ativa'
+            assert any(c['name']=='login-sintetico' for c in second.cookies())
+            assert all('/login' not in p.url for p in second.pages)
+        finally: second.close()

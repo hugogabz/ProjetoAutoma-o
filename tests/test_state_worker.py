@@ -166,3 +166,30 @@ def test_session_expiry_pauses_and_restores_source_before_reread(tmp_path):
     assert worker.step()
     assert page.restored=='source-page'
     assert state.process(B.process)['status']=='PREENCHIDO'
+
+
+def test_worker_reads_first_before_identifying_next_and_skips_failed_tab(tmp_path):
+    state=State(tmp_path/'state.db')
+    run=state.create_execution()
+    calls=[]
+    class Page:
+        def __init__(self,label): self.url=label
+    pages=[Page(str(i)) for i in range(3)]
+    class Adapter:
+        def open_queue(self): return pages
+        def identify(self,page):
+            calls.append('identify:'+page.url)
+            if page is pages[1]: raise AutomationError('PROCESSO_DIVERGENTE','Página lenta.')
+            return NUMBERS[int(page.url)]
+        def read_document(self,page,number):
+            calls.append('read:'+page.url)
+            return replace(B,process=number),'Proposta'
+        def fill(self,*args): pass
+    worker=Worker(state,run,Adapter())
+    assert worker.step()
+    assert calls==['identify:0','read:0']
+    assert state.process(NUMBERS[0])['status']=='PREENCHIDO'
+    assert worker.step()
+    assert worker.step()
+    assert calls==['identify:0','read:0','identify:1','identify:2','read:2']
+    assert state.process(NUMBERS[2])['status']=='PREENCHIDO'

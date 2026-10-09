@@ -159,3 +159,39 @@ def test_stale_login_tab_does_not_hide_authenticated_queue(context,site):
     queue=context.new_page()
     queue.goto(url+'/queue')
     assert Eproc(context).queue_page() is queue
+
+
+def test_pagination_reload_opens_100_selected_processes(context,site):
+    url,_=site
+    queue=context.new_page()
+    queue.goto(url+'/queue?count=1')
+    queue.locator(S.QUEUE_PAGE_SIZE).evaluate("""el=>{el.checked=false;el.onclick=()=>location.href='/queue?count=100'}""")
+    records=[]
+    adapter=Eproc(context,lambda n,a,v=None,r='OK':records.append((a,v)))
+    pages=adapter.open_queue()
+    assert len(pages)==100
+    assert queue.locator(S.QUEUE_ROWS).count()==100
+    assert queue.locator(S.QUEUE_PAGE_SIZE).is_checked()
+    assert ('ABRIR_PROCESSOS_SELECIONADOS',{'count':100}) in records
+    assert len({adapter.identify(p) for p in pages})==100
+
+
+def test_identify_waits_for_delayed_popup_navigation(context,site):
+    url,_=site
+    queue=context.new_page()
+    queue.goto(url+'/queue?count=1')
+    queue.evaluate("""url=>{window.abreProcessosSelecionadosEmAbas=()=>{const p=window.open('about:blank');setTimeout(()=>p.location.href=url,300)}}""",url+'/process?num_processo='+B.process)
+    adapter=Eproc(context)
+    pages=adapter.open_queue()
+    assert adapter.identify(pages[0])==B.process
+    benefit,_=adapter.read_document(pages[0],B.process)
+    assert benefit.process==B.process
+
+
+def test_partial_selection_opens_all_without_inverting_checked_rows(context,site):
+    url,_=site
+    queue=context.new_page()
+    queue.goto(url+'/queue')
+    queue.locator(S.QUEUE_ROWS).nth(1).uncheck()
+    assert len(Eproc(context).open_queue())==3
+    assert all(queue.locator(S.QUEUE_ROWS).nth(i).is_checked() for i in range(3))

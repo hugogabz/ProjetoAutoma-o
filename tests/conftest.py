@@ -52,8 +52,8 @@ def site():
             code,ctype = 200,'text/html; charset=utf-8'
             if parsed.path == '/queue':
                 count = int(query.get('count',['3'])[0])
-                popup = ';'.join(f"window.open('/process?num_processo={n}','_blank')" for n in NUMBERS[:count])
-                content = '<title>eproc · Lista de Processos por Localizador</title><h1>Lista de Processos por Localizador</h1>'+''.join(f'<input type="checkbox" id="chkInfraItem{i}" checked>' for i in range(count))+'''<a id="lnkInfraCheck" href="#" onclick="window.toggles=(window.toggles||0)+1;document.querySelectorAll('input[type=checkbox]').forEach(x=>x.checked=!x.checked)">Todos</a>'''+f'<a href="#" onclick="abreProcessosSelecionadosEmAbas()">Abrir processos</a><script>function abreProcessosSelecionadosEmAbas(){{{popup}}}</script>'
+                popup = ';'.join(f"window.open('/process?num_processo={n}','_blank')" for n in (NUMBERS + [f'{i:09d}20264060001' for i in range(4,count+1)])[:count])
+                content = '<input type="radio" name="paginacao" id="optPaginacao100" value="100" checked><title>eproc · Lista de Processos por Localizador</title><h1>Lista de Processos por Localizador</h1>'+''.join(f'<input type="checkbox" id="chkInfraItem{i}" checked>' for i in range(count))+'''<a id="lnkInfraCheck" href="#" onclick="window.toggles=(window.toggles||0)+1;document.querySelectorAll('input[type=checkbox]').forEach(x=>x.checked=!x.checked)">Todos</a>'''+f'<a href="#" onclick="abreProcessosSelecionadosEmAbas();">Abrir os processos selecionados em abas/janelas</a><script>function abreProcessosSelecionadosEmAbas(){{{popup}}}</script>'
             elif parsed.path == '/process':
                 content = f'<h1>{number}</h1><table><tr><td>Proposta de conciliação</td><td><a class="infraLinkDocumento" data-nome="PROACORDO" href="/wrapper?num_processo={number}&SeqDocumento=1&numSeqEvento=26" target="_blank">PROACORDO1</a></td></tr></table><a class="infraButton" href="/form?num_processo={number}">Requisição CEAB/DJ</a><a href="/minute?num_processo={number}">Minutar</a>'
             elif parsed.path == '/wrapper':

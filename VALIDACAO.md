@@ -2,12 +2,20 @@
 
 Ambiente testado: Python 3.12, Chromium 151 e dependências de `requirements.lock`.
 
-- `python -m pytest -q`: **54 testes aprovados, nenhum pulado**, com as amostras
+- `python -m pytest -q`: **59 testes aprovados, nenhum pulado**, com as amostras
   pessoais disponíveis no diretório local ignorado `samples/private/`.
 - Novo modo padrão: worker abre navegador gerenciado com perfil persistente,
   espera comando explícito antes de processar e não exige uma porta CDP.
-- Cookie de sessão sintético (sem data de expiração) e armazenamento local
-  preservados após fechar e reabrir Chromium no mesmo perfil.
+- Cookie de sessão sintético (sem data de expiração), armazenamento local e
+  armazenamento da aba (sessionStorage) preservados após fechar e reabrir
+  Chromium no mesmo perfil. A aba autenticada é restaurada sem visitar a URL
+  inicial de login; a aba vazia adicional do Chrome não é confundida com ela.
+- Paginação alterada com recarga para 100; clique no link fornecido abre 100
+  abas locais, com 100 números distintos. Seleção parcial não inverte linhas
+  previamente marcadas.
+- Aba aberta inicialmente em about:blank aguarda navegação atrasada. Worker
+  lê a primeira antes de identificar a próxima, registra uma aba com falha
+  e continua para a seguinte.
 - Execução completa do worker gerenciado, com conferência e envio simulado,
   sem clicar em Intimar ou salvar minuta. Abas permanecem abertas após terminar;
   o comando Encerrar navegador fecha o contexto e mantém o perfil no disco.

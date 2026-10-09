@@ -85,7 +85,7 @@ def browser_controls():
                 launch(state,test_mode,cdp_url)
                 st.rerun()
             except (ValueError,OSError) as exc: st.error(str(exc))
-    st.caption('Deixe aberta a Lista de Processos por Localizador (até 25) antes de iniciar o processamento.')
+    st.caption('Abra a Lista de Processos por Localizador. Ao iniciar, o sistema define 100 por página, seleciona os processos e abre as abas.')
 
 with st.sidebar:
     browser_controls()

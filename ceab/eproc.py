@@ -3,7 +3,7 @@ import re
 import time
 from urllib.parse import parse_qs, urljoin, urlparse
 from bs4 import BeautifulSoup
-from playwright.sync_api import TimeoutError as PlaywrightTimeout
+from playwright.sync_api import Error as BrowserError, TimeoutError as PlaywrightTimeout
 from . import selectors as S
 from .extractor import CNJ, digits, extract_html, extract_pdf
 from .models import AutomationError
@@ -96,15 +96,28 @@ class Eproc:
 
     def open_queue(self):
         page = self.queue_page()
+        page.bring_to_front()
+        pagination = locate(page,S.QUEUE_PAGE_SIZE)
+        pagination.check()
+        page.wait_for_load_state('load')
+        # Reencontrar controles após a recarga provocada pela paginação.
+        locate(page,S.QUEUE_PAGE_SIZE).wait_for(state='visible')
+        if not locate(page,S.QUEUE_PAGE_SIZE).is_checked():
+            raise AutomationError('PREENCHIMENTO_DIVERGENTE','A listagem não reteve o limite de 100 processos.')
+        self.audit(None,'PAGINACAO',{'limit':S.QUEUE_LIMIT},'OK')
         toggle = locate(page,S.QUEUE_TOGGLE)
         frame = toggle.element_handle().owner_frame()
         checks = frame.locator(S.QUEUE_ROWS)
         count = checks.count()
         if not count:
             raise AutomationError('ELEMENTO_NAO_ENCONTRADO','Nenhuma linha de processo encontrada na página atual.')
-        if count > 25:
-            raise AutomationError('ELEMENTO_NAO_ENCONTRADO','A página contém mais de 25 processos. Ajuste a lista para até 25.')
+        if count > S.QUEUE_LIMIT:
+            raise AutomationError('ELEMENTO_NAO_ENCONTRADO','A página contém mais de 100 processos. Ajuste a lista para até 100.')
         if not all(checks.nth(i).is_checked() for i in range(count)):
+            # O controle alterna todos: limpar a seleção parcial antes do clique
+            # evita desmarcar os processos que já estavam selecionados.
+            for i in range(count):
+                if checks.nth(i).is_checked(): checks.nth(i).uncheck()
             toggle.click()
         if not all(checks.nth(i).is_checked() for i in range(count)):
             raise AutomationError('PREENCHIMENTO_DIVERGENTE','A seleção não marcou todas as linhas; confira a lista manualmente.')
@@ -114,6 +127,7 @@ class Eproc:
         self.context.on('page',capture)
         try:
             locate(page,S.QUEUE_OPEN).click()
+            self.audit(None,'ABRIR_PROCESSOS_SELECIONADOS',{'count':count},'CLICADO')
             deadline = time.monotonic()+60
             while len(opened) < count:
                 remaining = deadline-time.monotonic()
@@ -129,7 +143,14 @@ class Eproc:
         return opened[:count]
 
     def identify(self,page):
-        page.wait_for_load_state('domcontentloaded')
+        try:
+            # window.open pode emitir uma aba about:blank antes de navegar.
+            page.wait_for_url(lambda url: str(url) not in ('about:blank',''),
+                              wait_until='domcontentloaded',timeout=S.NAVIGATION_TIMEOUT)
+            page.wait_for_load_state('load',timeout=S.NAVIGATION_TIMEOUT)
+            page.locator('body').wait_for(state='attached',timeout=S.NAVIGATION_TIMEOUT)
+        except BrowserError as exc:
+            raise AutomationError('PROCESSO_DIVERGENTE','A aba não terminou de carregar ou foi fechada. Confira-a manualmente.') from exc
         assert_session(page)
         number = number_from_url(page.url)
         if number: return number

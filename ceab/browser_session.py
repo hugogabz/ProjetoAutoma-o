@@ -1,7 +1,9 @@
 """Chrome/Chromium do sistema com perfil persistente, sem porta CDP pública."""
+import json
 import os
 import shutil
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 def find_browser():
@@ -15,12 +17,30 @@ def find_browser():
 def open_persistent(playwright,config):
     profile = Path(config['profile_path'])
     profile.mkdir(parents=True,exist_ok=True,mode=0o700)
-    options = {'headless':bool(config['headless']),'args':['--disable-popup-blocking','--restore-last-session']}
+    # O perfil Default é sempre o mesmo. A preferência nativa conserva também
+    # cookies de sessão e abas, inclusive quando a janela é fechada pelo usuário.
+    preferences = profile/'Default'/'Preferences'
+    preferences.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+    data = json.loads(preferences.read_text()) if preferences.exists() else {}
+    data.setdefault('profile',{}).setdefault('name','CEAB/DJ')
+    data.setdefault('session',{})['restore_on_startup'] = 1
+    preferences.write_text(json.dumps(data))
+    preferences.chmod(0o600)
+    options = {'headless':bool(config['headless']),
+               'args':['--disable-popup-blocking','--restore-last-session','--profile-directory=Default']}
     if config.get('executable_path'): options['executable_path'] = config['executable_path']
     context = playwright.chromium.launch_persistent_context(str(profile),**options)
-    page = context.pages[0] if context.pages else context.new_page()
+    # Não substituir uma aba autenticada restaurada pela página inicial/login.
+    origin = urlparse(config['start_url']).netloc
+    restored = next((p for p in context.pages if urlparse(p.url).netloc == origin),None)
     from playwright.sync_api import Error as BrowserError
-    try: page.goto(config['start_url'],wait_until='domcontentloaded',timeout=30000)
+    try:
+        if restored:
+            restored.wait_for_load_state('domcontentloaded',timeout=30000)
+            restored.bring_to_front()
+        else:
+            page = next((p for p in context.pages if p.url == 'about:blank'),None) or context.new_page()
+            page.goto(config['start_url'],wait_until='domcontentloaded',timeout=30000)
     except BrowserError:
         # Falha de rede ou espera por certificado não deve destruir a janela
         # antes que a pessoa possa fazer login/navegar manualmente.

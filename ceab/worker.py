@@ -16,6 +16,7 @@ class Worker:
         self.pages = {}
         self.source_urls = {}
         self.pending = deque()
+        self.pending_pages = deque()
         self.managed = not auto_start
         self.started = auto_start
         self.close_requested = False
@@ -144,16 +145,26 @@ class Worker:
                 self.state.execution_update(self.run,status='PAUSADO',message=str(exc))
                 self.audit(None,'SESSAO_EXPIRADA',{},str(exc))
                 return True
-            for page in pages:
-                try:
-                    number = self.adapter.identify(page)
-                    if self.state.add_process(self.run,number):
-                        self.pages[number] = page
-                        self.source_urls[number] = page.url
-                        self.pending.append(number)
-                except AutomationError as exc:
-                    self.audit(None,'ABA_NAO_IDENTIFICADA',{'code':exc.code},str(exc))
+            self.pending_pages.extend(pages)
             self.queue_loaded = True
+        # Identificar e ler uma aba por vez; não esperar todas antes da primeira.
+        if not self.pending and self.pending_pages:
+            page = self.pending_pages.popleft()
+            try:
+                number = self.adapter.identify(page)
+                if self.state.add_process(self.run,number):
+                    self.pages[number] = page
+                    self.source_urls[number] = page.url
+                    self.pending.append(number)
+            except Exception as exc:
+                code = getattr(exc,'code','PROCESSO_DIVERGENTE')
+                message = str(exc) if isinstance(exc,AutomationError) else 'Falha ao carregar a aba; confira manualmente.'
+                self.audit(None,'ABA_NAO_IDENTIFICADA',{'code':code},message)
+                if code == 'SESSAO_EXPIRADA':
+                    self.pending_pages.appendleft(page)
+                    self.paused = self.session_paused = True
+                return True
+            if not self.pending: return True
         if self.pending:
             number = self.pending.popleft()
             if self.state.process(number)['status'] != 'IGNORADO': self.prepare(number)
