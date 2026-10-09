@@ -35,3 +35,10 @@ serão pulados; os demais usam dados sintéticos versionados.
 
 A descoberta não habilita CDP num navegador iniciado sem depuração remota.
 Não abre um navegador, não instala extensão e não extrai credenciais.
+
+Após melhorar o diagnóstico de conexão do Chrome, os testes afetados foram
+executados com `python -m pytest tests/test_discovery.py tests/test_ui.py
+tests/test_cdp_integration.py -q`: **11 aprovados**. Incluem distinção entre
+porta indisponível e navegador sem aba do eproc, tolerância a URL inválida
+em outra aba e integração CDP com sessão sintética existente. O Chrome do
+computador do usuário não foi acessado a partir da máquina de nuvem.

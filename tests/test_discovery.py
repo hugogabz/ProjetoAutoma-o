@@ -92,3 +92,23 @@ def test_panel_can_find_existing_tab(tmp_path,monkeypatch):
     assert not ui.exception
     assert not next(b for b in ui.button if b.label=='Iniciar').disabled
     assert any('sessão' in i.value for i in ui.success)
+
+
+def test_diagnostic_distinguishes_closed_port_from_missing_tab(cdp_server,monkeypatch):
+    from ceab.discovery import diagnose_browser
+    url,targets,_=cdp_server
+    targets[:]=[]
+    assert diagnose_browser(url)['status']=='SEM_ABA_EPROC'
+    def unavailable(*args): raise ConnectionRefusedError()
+    monkeypatch.setattr('ceab.discovery._local_json',unavailable)
+    assert diagnose_browser(url)['status']=='CDP_INACESSIVEL'
+    assert diagnose_browser('http://example.com')['status']=='ENDERECO_INVALIDO'
+
+
+def test_diagnostic_keeps_valid_tab_when_another_url_is_malformed(cdp_server):
+    from ceab.discovery import diagnose_browser
+    url,targets,_=cdp_server
+    targets.insert(0,{'type':'page','title':'Outra aba','url':'http://[invalido'})
+    diagnosis=diagnose_browser(url)
+    assert diagnosis['status']=='ABA_ENCONTRADA'
+    assert len(diagnosis['match']['tabs'])==1

@@ -3,7 +3,7 @@ import re
 from urllib.parse import urlparse
 import streamlit as st
 from ceab.launcher import launch, probe_cdp, recover_dead_worker
-from ceab.discovery import find_existing_browsers, inspect_browser
+from ceab.discovery import find_existing_browsers, diagnose_browser
 from ceab.models import AutomationError, Benefit
 from ceab.rules import decide, normalize_date
 from ceab.state import ACTIVE, State
@@ -29,15 +29,21 @@ with st.sidebar:
         selected = choices[index]
         st.success('Aba existente encontrada. A sessão desse navegador será reutilizada.')
         for tab in selected['tabs']: st.caption(tab['title'])
-    else:
-        st.info('Nenhuma aba do eproc acessível foi encontrada no navegador local.')
     with st.expander('Conexão manual / aba não encontrada'):
         manual = st.checkbox('Informar endereço CDP manualmente',disabled=active)
         manual_url = st.text_input('Endereço CDP',value='http://localhost:9222',disabled=active)
-        st.caption('Uma aba comum só pode ser controlada se o Brave tiver sido iniciado com depuração remota. Não é possível habilitar esse acesso em uma sessão já aberta normalmente. O sistema não reinicia o navegador nem abre uma tela de login.')
-        if manual:
-            selected = inspect_browser(manual_url)
-            if not selected: st.info('Esse endereço não oferece uma aba do eproc acessível. Confira a porta e abra a lista na sessão existente.')
+        st.caption('Uma aba comum só pode ser controlada se o Chrome tiver sido iniciado com depuração remota. Não é possível habilitar esse acesso em uma sessão já aberta normalmente. O sistema não reinicia o navegador nem abre uma tela de login.')
+    if manual or not selected:
+        diagnosis = diagnose_browser(manual_url)
+        selected = diagnosis['match']
+        if selected:
+            st.success(diagnosis['message'])
+            for tab in selected['tabs']: st.caption(tab['title'])
+        else:
+            st.info('Nenhuma aba do eproc acessível foi encontrada no navegador local.')
+            st.warning(diagnosis['message'])
+            if diagnosis['status']=='CDP_INACESSIVEL':
+                st.caption('No seu Chrome, confira se http://127.0.0.1:9222/json/version abre. Chrome e Streamlit precisam rodar na mesma máquina. Uma sessão comum sem CDP não pode ser assumida depois de aberta.')
     cdp_url = latest['cdp_url'] if active else selected['endpoint'] if selected else None
     connected = bool(selected) if not active else probe_cdp(cdp_url)[0]
     test_mode = st.toggle('Modo teste (não intima)',value=True,disabled=active,help='Intimar e Apenas salvar nunca são clicados neste modo.')

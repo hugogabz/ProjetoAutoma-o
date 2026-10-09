@@ -209,3 +209,30 @@ OCR, análise de identidade ou chamadas a APIs do eproc.
 
 `selectors.py` fica dentro de `ceab/` para não ocultar o módulo `selectors` da
 biblioteca padrão usado por subprocessos.
+
+### Chrome no Linux: diagnóstico de aba não encontrada
+
+O painel agora diferencia conexão CDP indisponível, resposta inválida, falha
+na consulta de abas e Chrome conectado sem uma aba reconhecida do eproc.
+Uma aba com URL inválida não impede reconhecer as outras.
+
+No mesmo computador que executa o Streamlit, abra no Chrome:
+`http://127.0.0.1:9222/json/version`. Se houver erro de conexão, não existe
+acesso CDP por esse endereço naquele momento. Confira a porta usada pelo
+Chrome. Para preparar uma instância acessível, execute manualmente:
+
+```bash
+google-chrome --remote-debugging-port=9222 --user-data-dir="$HOME/.ceab-chrome" --disable-popup-blocking
+```
+
+Use `google-chrome-stable` se necessário. Caso esse perfil já esteja aberto
+sem depuração, feche as janelas desse perfil antes de executar o comando.
+O comando não habilita depuração numa janela pessoal que já está aberta;
+as versões atuais do Chrome exigem perfil separado para essa finalidade.
+Mantenha o mesmo perfil `.ceab-chrome` nas próximas execuções.
+
+Quando o endereço de diagnóstico mostrar JSON, abra o eproc nesse Chrome,
+faça login se necessário, deixe a Lista de Processos por Localizador aberta
+ e clique em **Procurar aba aberta**. Chrome e Streamlit precisam estar na
+mesma máquina; um Streamlit na nuvem não alcança o Chrome do seu computador
+pelo endereço localhost.

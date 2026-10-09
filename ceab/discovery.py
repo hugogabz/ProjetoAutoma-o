@@ -57,27 +57,42 @@ def _local_json(endpoint,path):
     return json.loads(content)
 
 
-def inspect_browser(endpoint):
-    """Retorna títulos, nunca cookies, URLs de processo ou websocket de sessão."""
+def diagnose_browser(endpoint):
+    """Distingue conexão ausente de Chrome conectado sem aba reconhecida."""
     try:
         endpoint = validate_cdp(endpoint)
+    except ValueError:
+        return {'status':'ENDERECO_INVALIDO','match':None,'message':'Informe um endereço HTTP local, como http://localhost:9222.'}
+    try:
         version = _local_json(endpoint,'/json/version')
-        if not isinstance(version,dict) or not version.get('webSocketDebuggerUrl'): return None
-        targets = _local_json(endpoint,'/json/list')
-        if not isinstance(targets,list): return None
-        tabs = []
-        for target in targets:
-            if not isinstance(target,dict) or target.get('type') != 'page': continue
-            title = str(target.get('title',''))
-            host = urlparse(str(target.get('url',''))).hostname or ''
-            queue = 'LISTA DE PROCESSOS POR LOCALIZADOR' in normalize(title)
-            eproc = 'eproc' in host.lower() and (host.lower().endswith('.trf6.jus.br') or host.lower()=='trf6.jus.br')
-            if eproc or queue:
-                tabs.append({'title':title[:200] or 'eproc TRF6','queue':queue})
-        if not tabs: return None
-        return {'endpoint':endpoint,'browser':str(version.get('Browser','Chromium'))[:100],'tabs':tabs}
     except (OSError,ValueError,TypeError):
-        return None
+        return {'status':'CDP_INACESSIVEL','match':None,'message':'Não foi possível acessar a depuração do Chrome nessa porta. Ele pode estar aberto sem depuração remota, usar outra porta ou estar em outro computador que o Streamlit.'}
+    if not isinstance(version,dict) or not version.get('webSocketDebuggerUrl'):
+        return {'status':'CDP_INVALIDO','match':None,'message':'A porta respondeu, mas não oferece o controle de um navegador Chromium.'}
+    try:
+        targets = _local_json(endpoint,'/json/list')
+        if not isinstance(targets,list): raise ValueError('Lista inválida.')
+    except (OSError,ValueError,TypeError):
+        return {'status':'LISTA_INACESSIVEL','match':None,'message':'O Chrome respondeu, mas não foi possível consultar suas abas. Confira a conexão CDP e procure novamente.'}
+    tabs = []
+    for target in targets:
+        if not isinstance(target,dict) or target.get('type') != 'page': continue
+        title = str(target.get('title',''))
+        try: host = urlparse(str(target.get('url',''))).hostname or ''
+        except ValueError: continue
+        queue = 'LISTA DE PROCESSOS POR LOCALIZADOR' in normalize(title)
+        eproc = 'eproc' in host.lower() and (host.lower().endswith('.trf6.jus.br') or host.lower()=='trf6.jus.br')
+        if eproc or queue:
+            tabs.append({'title':title[:200] or 'eproc TRF6','queue':queue})
+    if not tabs:
+        return {'status':'SEM_ABA_EPROC','match':None,'message':'Chrome conectado, mas nenhuma aba do eproc TRF6 foi reconhecida nessa instância. Abra a lista no Chrome conectado a essa porta e clique em Procurar aba aberta.'}
+    match = {'endpoint':endpoint,'browser':str(version.get('Browser','Chromium'))[:100],'tabs':tabs}
+    return {'status':'ABA_ENCONTRADA','match':match,'message':'Aba do eproc encontrada no navegador conectado.'}
+
+
+def inspect_browser(endpoint):
+    """Retorna títulos, nunca cookies, URLs de processo ou websocket de sessão."""
+    return diagnose_browser(endpoint)['match']
 
 
 def find_existing_browsers(cdp_urls=None):
