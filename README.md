@@ -29,48 +29,69 @@ As dependências diretas estão em `requirements.txt`; `requirements.lock` fixa
 as dependências transitivas da instalação testada. Não são necessários tokens
 ou APIs do eproc. Não execute o painel em um servidor público.
 
-## Operação
+## Operação: aproveitar a aba já aberta
 
-1. Inicie um Chrome dedicado em um terminal:
+O painel procura abas do eproc em navegadores que **já estão em execução**.
+Não inicia Brave/Chrome, não cria uma janela ou aba de login e não copia cookies.
+Não utiliza extensão. O worker assume a Lista de Processos por Localizador
+na sessão existente e mantém os critérios de conferência do PRD.
 
-   ```bash
-   python scripts/start_browser.py
-   ```
+**Limite técnico:** a sessão existente precisa estar acessível por depuração
+remota (CDP). Não é possível ativar CDP retroativamente em um Brave aberto
+normalmente. Sem esse acesso, o sistema informa que não encontrou uma aba
+acessível e não tenta reiniciar o navegador nem recuperar seus cookies.
+Versões que restringem a depuração do perfil padrão precisam de um perfil
+permitido pelo navegador. O sistema não contorna essa restrição.
 
-   Se o navegador não for encontrado, informe `--executable "caminho/do/chrome"`.
-   O perfil dedicado é `~/.ceab-chromium`; não use seu perfil habitual.
-   Alternativamente, execute:
-
-   ```bash
-   chrome --remote-debugging-port=9222 --user-data-dir="perfil-ceab" --disable-popup-blocking
-   ```
-
-2. Faça login manualmente no eproc na janela aberta. Abra **Lista de Processos
-   por Localizador**, na página desejada, com até 25 linhas e pop-ups liberados.
-3. Em outro terminal, com o ambiente Python ativado, execute:
+1. No Brave/Chrome já aberto com depuração remota, deixe a aba autenticada do
+   eproc na **Lista de Processos por Localizador**, com até 25 processos.
+2. Com o ambiente Python ativado, execute na raiz do repositório:
 
    ```bash
    streamlit run app.py --server.address 127.0.0.1 --browser.gatherUsageStats false
    ```
 
-4. No painel, mantenha **Modo teste** ligado na primeira execução e clique em
-   **Iniciar**. O worker abre os processos da página atual, lê a proposta e
-   preenche os formulários. A seleção de todos é conferida antes e depois;
-   nunca pagina a lista.
-5. Abra **Conferir formulário**. Compare cada cartão com a proposta e a aba do
-   eproc. Edite DIB, DIP ou DCB se necessário. Evento e destino são recalculados
-   pelas regras do PRD. Marque **Conferi os dados e autorizo o envio** em cada
-   processo que deseja aprovar e clique em **Enviar conferidos**.
+3. O painel procura a aba automaticamente. Clique em **Procurar aba aberta**
+   se abriu o navegador ou mudou de página depois de iniciar o painel. No Linux,
+   descobre as portas declaradas pelos processos Brave/Chrome/Chromium do
+   próprio usuário, incluindo porta dinâmica indicada em `DevToolsActivePort`.
+   Também consulta as portas locais 9222 e 9223. Não varre todas as portas e
+   não lê histórico, cookies ou credenciais do perfil.
+4. Se houver mais de um navegador acessível, escolha **Navegador encontrado**.
+   O painel mostra os títulos das abas. O worker procura a lista nos contextos
+   existentes, incluindo uma sessão fora do primeiro contexto. Não abre outra
+   aba de lista nem de login. As abas de processos/documentos continuam sendo
+   abertas conforme o fluxo de trabalho do PRD.
+5. Mantenha **Modo teste** ligado e clique em **Iniciar**. Em **Conferir
+   formulário**, revise cada proposta, edite DIB/DIP/DCB se necessário, marque
+   **Conferi os dados e autorizo o envio** e clique em **Enviar conferidos**.
 6. Em teste, os valores aprovados são reaplicados e lidos de volta. Quando há
-   minuta de cálculos, sua preferência é conferida em uma aba temporária, sem
-   salvar. Os processos
-   ficam FINALIZADO/Simulado e as abas permanecem abertas. Para envio real,
-   conclua/cancele a execução de teste, volte à lista e inicie outra execução,
-   desligando o modo teste e confirmando explicitamente a permissão de envio
-   real. Simulações podem ser relidas; a aprovação anterior nunca é reutilizada.
-7. Fora do teste, o worker intima em sequência. Só minuta quando o destino é
-   **Aguarda Prazo Apresentacao de Calculo**, usando a preferência
-   **jef-ato planilha de calculos** e **Apenas salvar**.
+   minuta de cálculos, a preferência é conferida numa aba temporária sem salvar.
+   Os processos ficam FINALIZADO/Simulado e as abas permanecem abertas.
+7. Para envio real, conclua/cancele a simulação, volte à lista existente e inicie
+   outra execução, desligando modo teste e confirmando a permissão de envio.
+   Simulações podem ser relidas; a aprovação anterior não é reutilizada. O
+   worker intima em sequência e só minuta quando o destino exige cálculos.
+
+Se usa outra porta que não foi descoberta, abra **Conexão manual / aba não
+encontrada**, marque a opção manual e informe, por exemplo,
+`http://localhost:9333`. Somente endereços de loopback são aceitos.
+
+### Quando o navegador ainda não oferece CDP
+
+Isso exige preparação manual antes de usá-lo na automação. Para Brave no Linux,
+a opção abaixo utiliza um perfil persistente separado:
+
+```bash
+brave-browser --remote-debugging-port=9222 --user-data-dir="$HOME/.ceab-brave" --disable-popup-blocking
+```
+
+Use `brave` se esse for o nome do executável. Faça login nesse perfil uma vez e
+mantenha sua janela aberta para as execuções seguintes, enquanto a sessão for
+válida. Reabrir o mesmo perfil preserva os dados do navegador; o eproc pode
+exigir novo login quando a sessão expirar. O painel não executa esse comando.
+`scripts/start_browser.py` permanece como utilitário opcional para preparação
+e demonstração, com `--executable` para indicar o Brave.
 
 **Pausar** termina a operação do processo atual e aguarda entre processos.
 **Cancelar** encerra no próximo limite seguro e preserva as abas restantes.
@@ -182,6 +203,7 @@ OCR, análise de identidade ou chamadas a APIs do eproc.
 - `ceab/state.py`: SQLite, comandos, aprovação e auditoria.
 - `ceab/selectors.py`, `ceab/eproc.py`: seletores e automação por etapa.
 - `ceab/worker.py`, `worker.py`: execução sequencial por CDP.
+- `ceab/discovery.py`: descoberta local de navegadores e abas existentes.
 - `ceab/launcher.py`, `app.py`: subprocesso e painel Streamlit.
 - `ceab/demo.py`, `samples/`, `tests/`: simulador e validação local.
 

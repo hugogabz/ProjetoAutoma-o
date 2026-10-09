@@ -169,10 +169,25 @@ def run_worker(path,run):
     worker = None
     try:
         with sync_playwright() as playwright:
-            browser = playwright.chromium.connect_over_cdp(config['cdp_url'],timeout=15000)
+            browser = playwright.chromium.connect_over_cdp(config['cdp_url'],timeout=15000,no_defaults=True)
             if not browser.contexts:
-                raise AutomationError('ELEMENTO_NAO_ENCONTRADO','Nenhum contexto no Chromium dedicado.')
-            adapter = Eproc(browser.contexts[0],lambda n,a,v=None,r='OK': state.log(run,n,a,v,r))
+                raise AutomationError('ELEMENTO_NAO_ENCONTRADO','Nenhuma sessão acessível no navegador existente.')
+            adapter = None
+            queue_error = None
+            expired_context = None
+            for context in browser.contexts:
+                candidate = Eproc(context,lambda n,a,v=None,r='OK': state.log(run,n,a,v,r))
+                try: candidate.queue_page()
+                except AutomationError as exc:
+                    queue_error = exc
+                    if exc.code == 'SESSAO_EXPIRADA': expired_context = candidate
+                    continue
+                adapter = candidate
+                break
+            if adapter is None and expired_context is not None:
+                adapter = expired_context
+            if adapter is None:
+                raise queue_error or AutomationError('ELEMENTO_NAO_ENCONTRADO','Lista de Processos por Localizador não encontrada nas abas existentes.')
             worker = Worker(state,run,adapter)
             def stop_signal(*_): worker.cancelled = True
             signal.signal(signal.SIGTERM,stop_signal)
@@ -180,6 +195,6 @@ def run_worker(path,run):
             worker.run_loop()
             # Não chamar browser.close(): a sessão e as abas pertencem ao usuário.
     except Exception as exc:
-        message = str(exc) if isinstance(exc,AutomationError) else 'Não foi possível conectar/manter o Chromium na porta CDP. Inicie o navegador dedicado e tente novamente.'
+        message = str(exc) if isinstance(exc,AutomationError) else 'Não foi possível conectar/manter o Chromium na porta CDP. Confira se a sessão existente permite depuração remota e procure a aba novamente.'
         state.log(run,None,'WORKER_ERRO',{'code':getattr(exc,'code','CONEXAO_CDP')},message)
         state.execution_update(run,status='ERRO',connected=0,message=message)

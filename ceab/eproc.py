@@ -81,12 +81,18 @@ class Eproc:
         context.set_default_navigation_timeout(S.NAVIGATION_TIMEOUT)
 
     def queue_page(self):
+        expired = None
         for page in self.context.pages:
-            assert_session(page)
+            if page.is_closed(): continue
+            try: assert_session(page)
+            except AutomationError as exc:
+                expired = exc
+                continue
             for frame in page.frames:
                 if frame.locator(S.QUEUE_OPEN).count() and 'LISTA DE PROCESSOS POR LOCALIZADOR' in normalize(frame.locator('body').inner_text()):
                     return page
-        raise AutomationError('ELEMENTO_NAO_ENCONTRADO', 'Abra a Lista de Processos por Localizador no Chromium dedicado.')
+        if expired: raise expired
+        raise AutomationError('ELEMENTO_NAO_ENCONTRADO', 'Abra a Lista de Processos por Localizador na sessão já autenticada do navegador.')
 
     def open_queue(self):
         page = self.queue_page()

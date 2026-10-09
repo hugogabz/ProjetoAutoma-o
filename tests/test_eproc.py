@@ -151,3 +151,11 @@ def test_minute_dry_run_checks_preference_without_saving(context,site):
     assert counts['minute']==0
     assert len(context.pages)==1
     assert '/form?' in page.url
+
+
+def test_stale_login_tab_does_not_hide_authenticated_queue(context,site):
+    url,_=site
+    context.new_page().goto(url+'/login')
+    queue=context.new_page()
+    queue.goto(url+'/queue')
+    assert Eproc(context).queue_page() is queue

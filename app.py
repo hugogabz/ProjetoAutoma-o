@@ -1,7 +1,9 @@
 """Painel local; nunca importa ou executa Playwright."""
 import re
+from urllib.parse import urlparse
 import streamlit as st
 from ceab.launcher import launch, probe_cdp, recover_dead_worker
+from ceab.discovery import find_existing_browsers, inspect_browser
 from ceab.models import AutomationError, Benefit
 from ceab.rules import decide, normalize_date
 from ceab.state import ACTIVE, State
@@ -12,12 +14,32 @@ recover_dead_worker(state)
 st.title('Requisições CEAB/DJ')
 st.caption('eproc TRF6 · preenchimento assistido com conferência humana · dados mantidos localmente')
 with st.sidebar:
-    st.header('Navegador dedicado')
-    cdp_url = st.text_input('Endereço CDP',value='http://localhost:9222')
-    connected,message = probe_cdp(cdp_url)
-    st.success(f'Conectado · {message}') if connected else st.info(message)
+    st.header('Aproveitar sessão aberta')
     latest = state.execution()
     active = bool(latest and latest['status'] in ACTIVE)
+    if 'browser_choices' not in st.session_state:
+        st.session_state.browser_choices = find_existing_browsers()
+    if st.button('Procurar aba aberta',disabled=active,width='stretch'):
+        st.session_state.browser_choices = find_existing_browsers()
+    choices = st.session_state.browser_choices
+    selected = None
+    if choices:
+        labels = [f"{c['browser']} · porta {urlparse(c['endpoint']).port} · {len(c['tabs'])} aba(s) eproc" for c in choices]
+        index = st.selectbox('Navegador encontrado',range(len(choices)),format_func=lambda i:labels[i],disabled=active)
+        selected = choices[index]
+        st.success('Aba existente encontrada. A sessão desse navegador será reutilizada.')
+        for tab in selected['tabs']: st.caption(tab['title'])
+    else:
+        st.info('Nenhuma aba do eproc acessível foi encontrada no navegador local.')
+    with st.expander('Conexão manual / aba não encontrada'):
+        manual = st.checkbox('Informar endereço CDP manualmente',disabled=active)
+        manual_url = st.text_input('Endereço CDP',value='http://localhost:9222',disabled=active)
+        st.caption('Uma aba comum só pode ser controlada se o Brave tiver sido iniciado com depuração remota. Não é possível habilitar esse acesso em uma sessão já aberta normalmente. O sistema não reinicia o navegador nem abre uma tela de login.')
+        if manual:
+            selected = inspect_browser(manual_url)
+            if not selected: st.info('Esse endereço não oferece uma aba do eproc acessível. Confira a porta e abra a lista na sessão existente.')
+    cdp_url = latest['cdp_url'] if active else selected['endpoint'] if selected else None
+    connected = bool(selected) if not active else probe_cdp(cdp_url)[0]
     test_mode = st.toggle('Modo teste (não intima)',value=True,disabled=active,help='Intimar e Apenas salvar nunca são clicados neste modo.')
     if active:
         st.caption('Modo desta execução: '+('TESTE' if latest['test_mode'] else 'ENVIO REAL'))
@@ -25,13 +47,12 @@ with st.sidebar:
     if not test_mode:
         st.warning('Envio real: processos conferidos serão intimados no eproc.')
         real_ack = st.checkbox('Quero permitir envio real após a conferência de cada processo.')
-    if st.button('Iniciar',type='primary',disabled=active or (not test_mode and not real_ack),width='stretch'):
+    if st.button('Iniciar',type='primary',disabled=active or not connected or (not test_mode and not real_ack),width='stretch'):
         try:
             launch(state,test_mode,cdp_url)
             st.rerun()
         except (ValueError,OSError) as exc: st.error(str(exc))
-    st.caption('Faça login manualmente e deixe aberta a Lista de Processos por Localizador (até 25).')
-    st.code('chrome --remote-debugging-port=9222 --user-data-dir="perfil-ceab" --disable-popup-blocking',language='bash')
+    st.caption('Deixe aberta a Lista de Processos por Localizador (até 25) na sessão em que você já está autenticado.')
 
 if 'screen' not in st.session_state: st.session_state.screen = 'Painel'
 screen = st.radio('Tela',('Painel','Conferir formulário'),horizontal=True,key='screen')

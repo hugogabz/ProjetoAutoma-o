@@ -6,6 +6,7 @@ import json
 import urllib.request
 from playwright.sync_api import sync_playwright
 from ceab.launcher import launch
+from ceab.discovery import find_existing_browsers
 from ceab.state import State,ACTIVE
 
 
@@ -28,9 +29,13 @@ def test_separate_worker_over_cdp(site,tmp_path):
         kwargs={'headless':True,'args':[f'--remote-debugging-port={port}','--disable-popup-blocking']}
         if shutil.which('chromium'): kwargs['executable_path']=shutil.which('chromium')
         context=pw.chromium.launch_persistent_context(tmp_path/'profile',**kwargs)
+        context.add_cookies([{'name':'sessao-teste','value':'login-existente','url':url}])
         context.pages[0].goto(url+'/queue')
+        found=find_existing_browsers([f'http://127.0.0.1:{port}'])
+        assert len(found)==1 and found[0]['tabs'][0]['queue']
+        assert len(context.pages)==1
         try:
-            run=launch(state,True,f'http://127.0.0.1:{port}')
+            run=launch(state,True,found[0]['endpoint'])
             eventually(lambda:len(state.processes(run))==3 and all(r['status'] in ('PREENCHIDO','ERRO_LEITURA') for r in state.processes(run)))
             assert state.execution(run)['connected']
             state.command(run,'pausar')
@@ -47,6 +52,7 @@ def test_separate_worker_over_cdp(site,tmp_path):
             with opener.open(f'http://127.0.0.1:{port}/json/list') as response:
                 targets=json.load(response)
             assert sum(t['type']=='page' for t in targets)==4
+            assert any(c['name']=='sessao-teste' and c['value']=='login-existente' for c in context.cookies())
         finally:
             if run and state.execution(run)['status'] in ACTIVE:
                 state.command(run,'cancelar')
