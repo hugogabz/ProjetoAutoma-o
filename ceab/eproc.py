@@ -1,0 +1,323 @@
+"""Etapas sequenciais do eproc. Sem acesso a APIs, login ou campos fora do PRD."""
+import re
+import time
+from urllib.parse import parse_qs, urljoin, urlparse
+from bs4 import BeautifulSoup
+from playwright.sync_api import TimeoutError as PlaywrightTimeout
+from . import selectors as S
+from .extractor import CNJ, digits, extract_html, extract_pdf
+from .models import AutomationError
+from .rules import decide, normalize
+
+
+def number_from_url(url):
+    query = parse_qs(urlparse(url).query)
+    for key in ('num_processo','numProcesso','numProcessoIntimarAps'):
+        value = digits(query.get(key,[''])[0])
+        if len(value) == 20: return value
+    return None
+
+
+def assert_session(page):
+    parsed = urlparse(page.url)
+    action = parse_qs(parsed.query).get('acao',[''])[0].lower()
+    if re.search(r'(?:^|/)(?:login|logon|autenticacao)(?:[./]|$)', parsed.path, re.I) or action in ('login','autenticar','login_validar'):
+        raise AutomationError('SESSAO_EXPIRADA', 'Sessão expirada. Faça login no navegador e retome.')
+
+
+def locate(page, selector):
+    assert_session(page)
+    # Escolher um frame que já contém o elemento antes de aguardar sua visibilidade.
+    for frame in page.frames:
+        locator = frame.locator(selector)
+        if locator.count():
+            if locator.count() != 1:
+                raise AutomationError('ELEMENTO_NAO_ENCONTRADO', f'Seletor ambíguo: {selector}.')
+            try:
+                locator.wait_for(state='visible', timeout=S.ELEMENT_TIMEOUT)
+                return locator
+            except PlaywrightTimeout as exc:
+                assert_session(page)
+                raise AutomationError('ELEMENTO_NAO_ENCONTRADO', f'Elemento não visível: {selector}.') from exc
+    try:
+        page.locator(selector).wait_for(state='visible',timeout=S.ELEMENT_TIMEOUT)
+        return page.locator(selector)
+    except PlaywrightTimeout as exc:
+        assert_session(page)
+        for frame in page.frames[1:]:
+            if frame.locator(selector).count(): return locate(page,selector)
+        raise AutomationError('ELEMENTO_NAO_ENCONTRADO', f'Elemento ausente: {selector}.') from exc
+
+
+def role(page, name, roles=('link','button')):
+    """Somente papéis/textos exatos para a etapa de minuta ainda não mapeada."""
+    assert_session(page)
+    for frame in page.frames:
+        for kind in roles:
+            locator = frame.get_by_role(kind,name=name)
+            if locator.count():
+                if locator.count() != 1:
+                    raise AutomationError('ELEMENTO_NAO_ENCONTRADO','Controle de minuta ambíguo.')
+                locator.wait_for(state='visible',timeout=S.ELEMENT_TIMEOUT)
+                return locator
+    # Espera pelo papel principal, sem inventar controles alternativos.
+    locator = page.get_by_role(roles[0],name=name)
+    try:
+        locator.wait_for(state='visible',timeout=S.ELEMENT_TIMEOUT)
+        return locator
+    except PlaywrightTimeout as exc:
+        assert_session(page)
+        for frame in page.frames[1:]:
+            for kind in roles:
+                if frame.get_by_role(kind,name=name).count(): return role(page,name,roles)
+        raise AutomationError('ELEMENTO_NAO_ENCONTRADO','Controle de minuta não encontrado.') from exc
+
+
+class Eproc:
+    def __init__(self, context, audit=lambda *args,**kwargs: None):
+        self.context = context
+        self.audit = audit
+        context.set_default_timeout(S.ELEMENT_TIMEOUT)
+        context.set_default_navigation_timeout(S.NAVIGATION_TIMEOUT)
+
+    def queue_page(self):
+        for page in self.context.pages:
+            assert_session(page)
+            for frame in page.frames:
+                if frame.locator(S.QUEUE_OPEN).count() and 'LISTA DE PROCESSOS POR LOCALIZADOR' in normalize(frame.locator('body').inner_text()):
+                    return page
+        raise AutomationError('ELEMENTO_NAO_ENCONTRADO', 'Abra a Lista de Processos por Localizador no Chromium dedicado.')
+
+    def open_queue(self):
+        page = self.queue_page()
+        toggle = locate(page,S.QUEUE_TOGGLE)
+        frame = toggle.element_handle().owner_frame()
+        checks = frame.locator(S.QUEUE_ROWS)
+        count = checks.count()
+        if not count:
+            raise AutomationError('ELEMENTO_NAO_ENCONTRADO','Nenhuma linha de processo encontrada na página atual.')
+        if count > 25:
+            raise AutomationError('ELEMENTO_NAO_ENCONTRADO','A página contém mais de 25 processos. Ajuste a lista para até 25.')
+        if not all(checks.nth(i).is_checked() for i in range(count)):
+            toggle.click()
+        if not all(checks.nth(i).is_checked() for i in range(count)):
+            raise AutomationError('PREENCHIMENTO_DIVERGENTE','A seleção não marcou todas as linhas; confira a lista manualmente.')
+        self.audit(None,'FILA_SELECIONADA',{'count':count},'OK')
+        opened = []
+        def capture(new_page): opened.append(new_page)
+        self.context.on('page',capture)
+        try:
+            locate(page,S.QUEUE_OPEN).click()
+            deadline = time.monotonic()+60
+            while len(opened) < count:
+                remaining = deadline-time.monotonic()
+                if remaining <= 0: break
+                try: self.context.wait_for_event('page',timeout=remaining*1000)
+                except PlaywrightTimeout: break
+        finally:
+            self.context.remove_listener('page',capture)
+        if len(opened) != count:
+            self.audit(None,'ABAS_ABERTAS',{'expected':count,'actual':len(opened)},'Quantidade divergente; seguindo com as abertas.')
+        if not opened:
+            raise AutomationError('ELEMENTO_NAO_ENCONTRADO','Nenhum processo abriu. Libere os pop-ups no Chromium.')
+        return opened[:count]
+
+    def identify(self,page):
+        page.wait_for_load_state('domcontentloaded')
+        assert_session(page)
+        number = number_from_url(page.url)
+        if number: return number
+        matches = set(digits(m) for m in re.findall(CNJ,page.locator('body').inner_text()))
+        if len(matches) != 1:
+            raise AutomationError('PROCESSO_DIVERGENTE','Não foi possível identificar inequivocamente o número da aba.')
+        return matches.pop()
+
+    def document_link(self,page,number=None):
+        assert_session(page)
+        if not any(f.locator(S.DOCUMENTS).count() for f in page.frames):
+            try: page.locator(S.DOCUMENTS).first.wait_for(state='visible',timeout=S.ELEMENT_TIMEOUT)
+            except PlaywrightTimeout: assert_session(page)
+        candidates = []
+        for frame in page.frames:
+            for anchor in frame.locator(S.DOCUMENTS).all():
+                href = anchor.get_attribute('href') or ''
+                query = parse_qs(urlparse(urljoin(page.url,href)).query)
+                try:
+                    sequence = int(query.get('numSeqEvento',['0'])[0])
+                    document_sequence = int(query.get('SeqDocumento',['0'])[0])
+                except ValueError: continue
+                event_text = anchor.evaluate("el => (el.closest('tr') || el.parentElement).innerText")
+                candidates.append({'href':href,'name':anchor.get_attribute('data-nome') or '', 'event':sequence,'doc':document_sequence,'description':event_text})
+        self.audit(number,'DOCUMENTOS_CANDIDATOS',[{k:c[k] for k in ('name','event','doc')} for c in candidates],'LIDOS')
+        primary = [c for c in candidates if normalize(c['name']) == 'PROACORDO' and c['doc'] == 1]
+        fallback = [c for c in candidates if c['doc'] == 1 and any(x in normalize(c['description']) for x in ('PROPOSTA DE CONCILIACAO','CONTESTACAO'))]
+        selected = primary or fallback
+        if not selected:
+            raise AutomationError('DOCUMENTO_NAO_ENCONTRADO','Proposta de acordo não encontrada entre os documentos do processo.')
+        candidate = max(selected,key=lambda c:c['event'])
+        return urljoin(page.url,candidate['href']), f"{candidate['name'] or 'Proposta'} · evento {candidate['event']} · documento 1"
+
+    def read_document(self,page,number):
+        assert_session(page)
+        url,label = self.document_link(page,number)
+        document = self.context.new_page()
+        try:
+            document.goto(url,wait_until='domcontentloaded')
+            assert_session(document)
+            iframe = locate(document,S.DOCUMENT_FRAME)
+            src = iframe.get_attribute('src')
+            if not src:
+                raise AutomationError('DOCUMENTO_ILEGIVEL','Iframe do documento não possui endereço.')
+            source_url = urljoin(document.url,src)
+            for hop in range(3):
+                # Não enviar dados/autenticação para referências externas ao eproc.
+                if urlparse(source_url).netloc != urlparse(page.url).netloc:
+                    raise AutomationError('DOCUMENTO_ILEGIVEL','Documento aponta para origem externa; revisão manual necessária.')
+                response = self.context.request.get(source_url,timeout=S.NAVIGATION_TIMEOUT)
+                if response.status in (401,403):
+                    raise AutomationError('SESSAO_EXPIRADA','Documento inacessível com a sessão atual.')
+                if not response.ok:
+                    raise AutomationError('DOCUMENTO_ILEGIVEL',f'Falha ao baixar documento (HTTP {response.status}).')
+                parsed = urlparse(response.url)
+                if 'login' in parsed.path.lower() or parse_qs(parsed.query).get('acao',[''])[0] == 'login':
+                    raise AutomationError('SESSAO_EXPIRADA','Sessão expirou ao baixar o documento.')
+                content_type = response.headers.get('content-type','').lower()
+                if 'application/pdf' in content_type:
+                    return extract_pdf(response.body(),number),label
+                if 'html' not in content_type:
+                    raise AutomationError('DOCUMENTO_ILEGIVEL',f'Tipo de documento não suportado: {content_type}.')
+                html = response.text()
+                soup = BeautifulSoup(html,'html.parser')
+                if soup.select('input[type="password"]'):
+                    raise AutomationError('SESSAO_EXPIRADA','Tela de autenticação recebida no lugar do documento.')
+                embedded = soup.select_one('embed[src],object[data],iframe[src]')
+                if embedded:
+                    if hop == 2:
+                        raise AutomationError('DOCUMENTO_ILEGIVEL','Limite de dois saltos de incorporação excedido.')
+                    source_url = urljoin(response.url,embedded.get('src') or embedded.get('data'))
+                    continue
+                return extract_html(html,number),label
+            raise AutomationError('DOCUMENTO_ILEGIVEL','Documento não pôde ser lido.')
+        finally:
+            document.close()
+            page.bring_to_front()
+
+    def select_verified(self,page,selector,value,text):
+        locator = locate(page,selector)
+        locator.select_option(value=value)
+        selected_text = locator.locator('option:checked').inner_text()
+        if locator.input_value() != value or normalize(selected_text) != normalize(text):
+            raise AutomationError('PREENCHIMENTO_DIVERGENTE',f'Opção divergente em {selector}.')
+
+    def fill_verified(self,locator,value,field):
+        locator.fill(value)
+        locator.blur()
+        if locator.input_value() != value:
+            locator.fill('')
+            locator.press_sequentially(digits(value))
+            locator.blur()
+        if locator.input_value() != value:
+            raise AutomationError('PREENCHIMENTO_DIVERGENTE',f'O campo {field.upper()} não reteve o valor aprovado.')
+
+    def fill(self,page,benefit,open_form=True):
+        assert_session(page)
+        current = number_from_url(page.url)
+        if current and current != benefit.process:
+            raise AutomationError('PROCESSO_DIVERGENTE','A aba está em outro processo; preenchimento interrompido.')
+        if open_form:
+            locate(page,S.REQUISITION).click()
+        decision = decide(benefit)
+        self.select_verified(page,S.EVENT,decision.event,decision.event_text)
+        locate(page,S.CONFIRM_DOCUMENTS).check()
+        locate(page,S.DEACTIVATE_LOCATORS).click()
+        self.select_verified(page,S.DESTINATION,decision.destination,decision.destination_text)
+        block = locate(page,S.BENEFIT)
+        for field,selector in S.FIELDS.items():
+            value = getattr(benefit,field)
+            if value is None: continue
+            locator = block.locator(selector)
+            if locator.count() != 1:
+                raise AutomationError('ELEMENTO_NAO_ENCONTRADO',f'Campo {field.upper()} ausente ou ambíguo.')
+            self.fill_verified(locator,value,field)
+        self.verify(page,benefit)
+        self.audit(benefit.process,'PREENCHER',benefit.to_dict(),'CONFERIDO POR LEITURA')
+        return decision
+
+    def verify(self,page,benefit):
+        assert_session(page)
+        current = number_from_url(page.url)
+        if current and current != benefit.process:
+            raise AutomationError('PROCESSO_DIVERGENTE','Número do formulário divergiu do processo aprovado.')
+        decision = decide(benefit)
+        for selector,value,text in [(S.EVENT,decision.event,decision.event_text),(S.DESTINATION,decision.destination,decision.destination_text)]:
+            locator = locate(page,selector)
+            if locator.input_value() != value or normalize(locator.locator('option:checked').inner_text()) != normalize(text):
+                raise AutomationError('PREENCHIMENTO_DIVERGENTE','Evento ou localizador divergiu da aprovação.')
+        if not locate(page,S.CONFIRM_DOCUMENTS).is_checked():
+            raise AutomationError('PREENCHIMENTO_DIVERGENTE','Confirmação de documentos sugeridos desmarcada.')
+        block = locate(page,S.BENEFIT)
+        for field,selector in S.FIELDS.items():
+            expected = getattr(benefit,field)
+            if expected is not None and block.locator(selector).input_value() != expected:
+                raise AutomationError('PREENCHIMENTO_DIVERGENTE',f'{field.upper()} divergiu da aprovação.')
+
+    def submit(self,page,benefit,test_mode=True,before_click=lambda: True):
+        page.bring_to_front()
+        self.fill(page,benefit,open_form=False)
+        if test_mode:
+            self.audit(benefit.process,'ENVIO_SIMULADO',benefit.to_dict(),'INTIMAR NÃO CLICADO')
+            return False
+        button = locate(page,S.SUBMIT)
+        if not before_click():
+            raise AutomationError('ERRO_ENVIO','Envio já reservado ou concluído; não será repetido.')
+        dialogs = []
+        def handle(dialog):
+            dialogs.append((dialog.type,dialog.message))
+            self.audit(benefit.process,'DIALOGO',{'type':dialog.type,'message':dialog.message},'ACEITO')
+            dialog.accept()
+        page.on('dialog',handle)
+        try:
+            button.click()
+            # Espera de sucesso definida no PRD: botão deixa a página em até 15 s.
+            button.wait_for(state='detached',timeout=S.ELEMENT_TIMEOUT)
+            assert_session(page)
+            alerts = [message for kind,message in dialogs if kind == 'alert']
+            if alerts:
+                raise AutomationError('ERRO_ENVIO','Alerta de validação: '+'; '.join(alerts))
+            self.audit(benefit.process,'INTIMAR',benefit.to_dict(),'BOTÃO DEIXOU A PÁGINA; SEM ALERTAS')
+            return True
+        except PlaywrightTimeout as exc:
+            assert_session(page)
+            raise AutomationError('ERRO_ENVIO','; '.join(message for _,message in dialogs) or 'Envio não confirmado em 15 segundos; confira manualmente. Não será repetido.') from exc
+        finally:
+            page.remove_listener('dialog',handle)
+
+    def minute(self,page,number,test_mode=True,source_url=None):
+        preview = None
+        try:
+            if test_mode:
+                if not source_url:
+                    raise AutomationError('ELEMENTO_NAO_ENCONTRADO','Endereço original necessário para conferir a minuta em modo teste.')
+                # Preservar a aba do formulário; conferir a minuta em aba temporária.
+                preview = self.context.new_page()
+                preview.goto(source_url,wait_until='domcontentloaded')
+                page = preview
+            role(page,re.compile(r'^minutar$',re.I)).click()
+            preference = role(page,re.compile(r'prefer[eê]ncia',re.I),('combobox',))
+            choices = preference.locator('option').all()
+            exact = [o for o in choices if normalize(o.inner_text()) == normalize('jef-ato planilha de calculos')]
+            if len(exact) != 1:
+                raise AutomationError('ELEMENTO_NAO_ENCONTRADO','Preferência jef-ato planilha de calculos ausente ou ambígua.')
+            preference.select_option(value=exact[0].get_attribute('value'))
+            if normalize(preference.locator('option:checked').inner_text()) != normalize('jef-ato planilha de calculos'):
+                raise AutomationError('PREENCHIMENTO_DIVERGENTE','Preferência de minuta divergente.')
+            save = role(page,re.compile(r'^apenas salvar$',re.I),('button','link'))
+            if test_mode:
+                self.audit(number,'MINUTA_SIMULADA',{'preference':'jef-ato planilha de calculos'},'CONFERIDA; APENAS SALVAR NÃO CLICADO')
+                return
+            save.click()
+            save.wait_for(state='detached',timeout=S.ELEMENT_TIMEOUT)
+            assert_session(page)
+            self.audit(number,'MINUTAR',{},'APENAS SALVAR CONCLUÍDO')
+        finally:
+            if preview: preview.close()
