@@ -85,7 +85,7 @@ def browser_controls():
                 launch(state,test_mode,cdp_url)
                 st.rerun()
             except (ValueError,OSError) as exc: st.error(str(exc))
-    st.caption('Abra a Lista de Processos por Localizador. Ao iniciar, o sistema define 100 por página, seleciona os processos e abre as abas.')
+    st.caption('Abra a Lista de Processos por Localizador. Ao iniciar, o sistema define 100 por página e abre um processo por vez. As abas preenchidas ficam disponíveis para conferência.')
 
 with st.sidebar:
     browser_controls()
@@ -118,7 +118,7 @@ def panel():
         elif notice['action']=='ABA_NAO_IDENTIFICADA':
             st.warning('Aba sem número identificável: '+notice['result'])
         else:
-            st.info(f"{notice['number']}: registro anterior preservado; não foi reprocessado. Veja o histórico.")
+            st.info(f"{notice['number']}: {notice['result']}")
     a,b,c,d = st.columns(4)
     with a: command_button('Pausar','pausar',run,not active or execution['status']=='PAUSADO')
     with b: command_button('Retomar','retomar',run,execution['status']!='PAUSADO')

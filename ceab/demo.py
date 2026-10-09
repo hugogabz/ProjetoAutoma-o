@@ -16,7 +16,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(400,'Processo sintético inválido')
             return
         if parsed.path in ('/','/queue'):
-            popups=';'.join(f"window.open('/process?num_processo={n}','_blank')" for n in NUMBERS)
+            popups=';'.join(f"if(document.getElementById('chkInfraItem{i}').checked) window.open('/process?num_processo={n}','_blank')" for i,n in enumerate(NUMBERS))
             body='<input type="radio" name="paginacao" id="optPaginacao100" value="100" checked><title>eproc · Lista de Processos por Localizador</title><h1>Lista de Processos por Localizador</h1><p>DEMONSTRAÇÃO LOCAL · dados sintéticos</p>'+''.join(f'<p><input type="checkbox" id="chkInfraItem{i}">{n}</p>' for i,n in enumerate(NUMBERS))+'''<a id="lnkInfraCheck" href="#" onclick="const xs=[...document.querySelectorAll('input[type=checkbox]')];const all=xs.every(x=>x.checked);xs.forEach(x=>x.checked=!all)">Selecionar todos</a>'''+f'<p><a href="#" onclick="abreProcessosSelecionadosEmAbas()">Abrir os processos selecionados em abas/janelas</a></p><script>function abreProcessosSelecionadosEmAbas(){{{popups}}}</script>'
         elif parsed.path=='/process':
             body=f'<h1>Processo sintético {number}</h1><table><tr><td>Proposta de conciliação</td><td><a class="infraLinkDocumento" data-nome="PROACORDO" href="/wrapper?num_processo={number}&SeqDocumento=1&numSeqEvento=26" target="_blank">PROACORDO1</a></td></tr></table><p><a class="infraButton" href="/form?num_processo={number}">Requisição CEAB/DJ</a></p><a href="/minute?num_processo={number}">Minutar</a>'

@@ -88,3 +88,43 @@ def test_pdf_layout_fallback(filename,process,dib,dcb,amount,monkeypatch):
     monkeypatch.setattr(pdfplumber.page.Page,'extract_tables',lambda self:[])
     b=extract_pdf(path.read_bytes(),process)
     assert b.dib==dib and b.dcb==dcb and b.amount==Decimal(amount)
+
+
+@pytest.mark.parametrize('header',[
+ 'TABELA COM DADOS<br>PARA CUMPRIMENTO',
+ 'TABELA COM DADOS PARA CUMPRI\u00adMENTO',
+ 'DADOS PARA IMPLANTAÇÃO DO BENEFÍCIO',
+])
+def test_structured_table_with_wrapped_or_different_heading(header):
+    b=extract_html(HTML.replace('TABELA COM DADOS PARA CUMPRIMENTO',header))
+    assert b.dib=='03/07/2026' and b.dip=='01/09/2026'
+    assert b.amount==Decimal('2422.26')
+
+
+def test_two_structured_tables_without_heading_are_ambiguous():
+    content=HTML.replace('TABELA COM DADOS PARA CUMPRIMENTO','Dados do benefício')
+    with pytest.raises(AutomationError,match='Mais de uma tabela'):
+        extract_html(content+content)
+
+
+def test_nested_value_table_and_separate_calculation_preserve_amount():
+    content=HTML.replace('<td>Restabelecimento</td>','<td><table><tr><td>Restabelecimento</td></tr></table></td>')
+    content=content.replace('<tr><td>Valor dos atrasados','</table><table><tr><td>Valor dos atrasados')
+    b=extract_html(content)
+    assert b.kind=='RESTABELECIMENTO' and b.amount==Decimal('2422.26')
+
+
+def test_heading_split_across_pdf_text_lines():
+    from ceab.extractor import text_values,build_benefit
+    text='''NÚMERO: 00000000020264060001
+TABELA COM DADOS
+PARA CUMPRIMENTO
+Tipo       CONCESSÃO
+Espécie    Benefício sintético
+DIB        22/04/2025
+DIP        01/09/2026
+Valor dos atrasados    VALOR DEVIDO: R$ 100,00
+Honorários R$ 0,00'''
+    values,amount=text_values(text)
+    b=build_benefit(text,values,amount)
+    assert b.dib=='22/04/2025' and b.amount==Decimal('100')

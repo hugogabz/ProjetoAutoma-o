@@ -94,7 +94,7 @@ class Eproc:
         if expired: raise expired
         raise AutomationError('ELEMENTO_NAO_ENCONTRADO', 'Abra a Lista de Processos por Localizador na sessão já autenticada do navegador.')
 
-    def open_queue(self):
+    def queue_controls(self):
         page = self.queue_page()
         page.bring_to_front()
         pagination = locate(page,S.QUEUE_PAGE_SIZE)
@@ -113,6 +113,41 @@ class Eproc:
             raise AutomationError('ELEMENTO_NAO_ENCONTRADO','Nenhuma linha de processo encontrada na página atual.')
         if count > S.QUEUE_LIMIT:
             raise AutomationError('ELEMENTO_NAO_ENCONTRADO','A página contém mais de 100 processos. Ajuste a lista para até 100.')
+        return page,frame,checks
+
+    def queue_items(self):
+        page,frame,checks = self.queue_controls()
+        items = [(page,frame,checks.nth(i).get_attribute('id'),checks.nth(i).get_attribute('value'),
+                  checks.nth(i).evaluate("el=>el.closest('tr')?.innerText||''"))
+                 for i in range(checks.count())]
+        self.audit(None,'FILA_IDENTIFICADA',{'count':len(items)},'ABERTURA SEQUENCIAL')
+        return items
+
+    def open_process(self,item):
+        page,frame,identifier,value,row_text = item
+        assert_session(page)
+        page.bring_to_front()
+        checks = frame.locator(S.QUEUE_ROWS)
+        target = checks.and_(frame.locator('[id="'+identifier+'"]'))
+        if target.count() != 1 or target.get_attribute('value') != value or target.evaluate("el=>el.closest('tr')?.innerText||''") != row_text:
+            raise AutomationError('PROCESSO_DIVERGENTE','A listagem mudou durante a execução. Inicie uma nova fila para conferir as linhas atuais.')
+        selected_checks = frame.locator(S.QUEUE_ROWS+':checked')
+        for _ in range(selected_checks.count()):
+            selected_checks.first.uncheck()
+        target.check()
+        if frame.locator(S.QUEUE_ROWS+':checked').count() != 1:
+            raise AutomationError('PREENCHIMENTO_DIVERGENTE','Não foi possível selecionar somente o processo atual.')
+        self.audit(None,'FILA_SELECIONADA',{'count':1},'OK')
+        pages = self.open_selected(page,frame,1)
+        if len(pages) != 1:
+            raise AutomationError('PROCESSO_DIVERGENTE','O eproc abriu mais de uma aba para a seleção individual. Confira a lista.')
+        return pages[0]
+
+    def open_queue(self):
+        """Abertura em lote mantida para diagnóstico; o worker usa queue_items()."""
+        page,frame,checks = self.queue_controls()
+        toggle = locate(page,S.QUEUE_TOGGLE)
+        count = checks.count()
         if not all(checks.nth(i).is_checked() for i in range(count)):
             # O controle alterna todos: limpar a seleção parcial antes do clique
             # evita desmarcar os processos que já estavam selecionados.
@@ -122,6 +157,9 @@ class Eproc:
         if not all(checks.nth(i).is_checked() for i in range(count)):
             raise AutomationError('PREENCHIMENTO_DIVERGENTE','A seleção não marcou todas as linhas; confira a lista manualmente.')
         self.audit(None,'FILA_SELECIONADA',{'count':count},'OK')
+        return self.open_selected(page,frame,count)
+
+    def open_selected(self,page,frame,count):
         # O eproc pode repetir o mesmo link no topo e no rodapé da lista.
         # Preferir o frame da lista, com suporte ao link fora desse frame.
         frames = [frame]+[other for other in page.frames if other != frame]
@@ -171,7 +209,7 @@ class Eproc:
             if any(kind == 'prompt' for kind,_ in dialogs):
                 raise AutomationError('ELEMENTO_NAO_ENCONTRADO','O eproc pediu uma entrada manual durante a abertura. Confira a lista no navegador.')
             raise AutomationError('ELEMENTO_NAO_ENCONTRADO','O link de abertura foi clicado, mas nenhuma aba abriu. Confira os pop-ups e se há processos selecionados na lista do eproc.')
-        return opened[:count]
+        return opened
 
     def identify(self,page):
         try:
@@ -227,6 +265,19 @@ class Eproc:
             if not src:
                 raise AutomationError('DOCUMENTO_ILEGIVEL','Iframe do documento não possui endereço.')
             source_url = urljoin(document.url,src)
+            if urlparse(source_url).netloc != urlparse(page.url).netloc:
+                raise AutomationError('DOCUMENTO_ILEGIVEL','Documento aponta para origem externa; revisão manual necessária.')
+            live_frame = iframe.element_handle().content_frame()
+            if live_frame:
+                try:
+                    live_frame.wait_for_load_state('domcontentloaded',timeout=S.NAVIGATION_TIMEOUT)
+                    assert_session(live_frame)
+                    benefit = extract_html(live_frame.content(),number,rendered_text=live_frame.locator('body').inner_text())
+                    self.audit(number,'DOCUMENTO_RENDERIZADO',{},'LIDO NO NAVEGADOR')
+                    return benefit,label
+                except AutomationError as exc:
+                    if exc.code == 'SESSAO_EXPIRADA': raise
+                except BrowserError: pass
             for hop in range(3):
                 # Não enviar dados/autenticação para referências externas ao eproc.
                 if urlparse(source_url).netloc != urlparse(page.url).netloc:
@@ -254,11 +305,57 @@ class Eproc:
                         raise AutomationError('DOCUMENTO_ILEGIVEL','Limite de dois saltos de incorporação excedido.')
                     source_url = urljoin(response.url,embedded.get('src') or embedded.get('data'))
                     continue
-                return extract_html(html,number),label
+                try: return extract_html(html,number),label
+                except AutomationError as exc:
+                    if exc.code != 'DOCUMENTO_ILEGIVEL': raise
+                    return self.read_rendered_document(document,number,label,exc)
             raise AutomationError('DOCUMENTO_ILEGIVEL','Documento não pôde ser lido.')
         finally:
             document.close()
             page.bring_to_front()
+
+    def read_rendered_document(self,document,number,label,original_error):
+        # Alguns documentos HTML têm apenas um carregador na resposta HTTP.
+        # Esperar o conteúdo real nos frames da janela já autenticada.
+        try:
+            document.wait_for_function(r"""() => {
+                const norm=s=>(s||'').normalize('NFD').replace(/[\u0300-\u036f\u00ad\u200b\ufeff]/g,'').replace(/\s+/g,' ').trim().toUpperCase();
+                const ready=w=>{
+                    try {
+                        const d=w.document;
+                        if(d.querySelector('input[type=password]')) return true;
+                        const text=norm(d.body?.innerText);
+                        if(text.includes('TABELA COM DADOS PARA CUMPRIMENTO') && /\bTIPO\b/.test(text) && /\bDIP\b/.test(text) && /\bDIB\b|RESTABELECIMENTO A PARTIR DE/.test(text)) return true;
+                        for(const table of d.querySelectorAll('table')) {
+                            const labels=[...table.rows].map(r=>norm(r.cells[0]?.innerText));
+                            if(labels.includes('TIPO') && labels.some(s=>s.startsWith('DIB')||s.startsWith('RESTABELECIMENTO A PARTIR DE')) && labels.some(s=>s.startsWith('DIP'))) return true;
+                        }
+                        for(let i=0;i<w.frames.length;i++) if(ready(w.frames[i])) return true;
+                    } catch(e) {}
+                    return false;
+                };
+                return ready(window);
+            }""",timeout=S.NAVIGATION_TIMEOUT)
+        except PlaywrightTimeout as exc:
+            raise AutomationError('DOCUMENTO_ILEGIVEL',str(original_error)+' O conteúdo renderizado também não apresentou uma tabela reconhecível; confira a proposta aberta no navegador.') from exc
+        results = []
+        errors = []
+        for frame in document.frames:
+            if urlparse(frame.url).netloc not in ('',urlparse(document.url).netloc): continue
+            assert_session(frame)
+            if frame.locator('input[type=password]').count():
+                raise AutomationError('SESSAO_EXPIRADA','Tela de autenticação recebida no documento renderizado.')
+            try:
+                benefit = extract_html(frame.content(),number,rendered_text=frame.locator('body').inner_text())
+                results.append(benefit)
+            except AutomationError as exc: errors.append(exc)
+        if len(results) != 1:
+            if not results:
+                relevant = next((e for e in errors if e.code != 'DOCUMENTO_ILEGIVEL'),None)
+                raise relevant or original_error
+            raise AutomationError('DOCUMENTO_ILEGIVEL','Mais de um documento de cumprimento nos frames; revisão manual necessária.')
+        self.audit(number,'DOCUMENTO_RENDERIZADO',{},'LIDO NO NAVEGADOR')
+        return results[0],label
 
     def select_verified(self,page,selector,value,text):
         locator = locate(page,selector)

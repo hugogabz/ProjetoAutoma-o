@@ -17,6 +17,7 @@ class Worker:
         self.source_urls = {}
         self.pending = deque()
         self.pending_pages = deque()
+        self.pending_items = deque()
         self.managed = not auto_start
         self.started = auto_start
         self.close_requested = False
@@ -132,8 +133,8 @@ class Worker:
             return True
         if not self.queue_loaded:
             try:
-                self.state.execution_update(self.run,status='EXECUTANDO',message='Ajustando a lista para 100 processos, selecionando as linhas e abrindo as abas. Aguarde a confirmação da abertura.')
-                pages = self.adapter.open_queue()
+                self.state.execution_update(self.run,status='EXECUTANDO',message='Ajustando a lista para 100 processos. Cada processo será aberto, lido e preenchido antes de abrir o próximo.')
+                items = self.adapter.queue_items()
             except AutomationError as exc:
                 if exc.code != 'SESSAO_EXPIRADA':
                     if self.managed and exc.code=='ELEMENTO_NAO_ENCONTRADO':
@@ -146,8 +147,20 @@ class Worker:
                 self.state.execution_update(self.run,status='PAUSADO',message=str(exc))
                 self.audit(None,'SESSAO_EXPIRADA',{},str(exc))
                 return True
-            self.pending_pages.extend(pages)
+            self.pending_items.extend(items)
             self.queue_loaded = True
+        if not self.pending and not self.pending_pages and self.pending_items:
+            item = self.pending_items.popleft()
+            try:
+                self.pending_pages.append(self.adapter.open_process(item))
+            except Exception as exc:
+                code = getattr(exc,'code','ELEMENTO_NAO_ENCONTRADO')
+                message = str(exc) if isinstance(exc,AutomationError) else 'Falha na abertura individual; confira a lista.'
+                self.audit(None,'ABA_NAO_IDENTIFICADA',{'code':code},message)
+                if code == 'SESSAO_EXPIRADA':
+                    self.pending_items.appendleft(item)
+                    self.paused = self.session_paused = True
+                return True
         # Identificar e ler uma aba por vez; não esperar todas antes da primeira.
         if not self.pending and self.pending_pages:
             page = self.pending_pages.popleft()

@@ -265,3 +265,43 @@ def test_open_link_outside_frame_of_queue_rows(context,site):
     }""")
     queue.frame_locator('iframe').locator(S.QUEUE_ROWS).first.wait_for()
     assert len(Eproc(context).open_queue())==3
+
+
+def test_sequential_queue_opens_only_one_selected_process_at_a_time(context,site):
+    url,_=site
+    queue=context.new_page()
+    queue.goto(url+'/queue')
+    adapter=Eproc(context)
+    items=adapter.queue_items()
+    assert len(context.pages)==1
+    first=adapter.open_process(items[0])
+    assert len(context.pages)==2
+    assert adapter.identify(first)==NUMBERS[0]
+    assert sum(x.is_checked() for x in queue.locator(S.QUEUE_ROWS).all())==1
+    second=adapter.open_process(items[1])
+    assert len(context.pages)==3
+    assert adapter.identify(second)==NUMBERS[1]
+    assert not first.is_closed()
+
+
+def test_reads_html_loaded_by_javascript_in_document_frame(context,site):
+    url,counts=site
+    counts['dynamic']=True
+    page=context.new_page()
+    page.goto(url+'/process?num_processo='+B.process)
+    b,label=Eproc(context).read_document(page,B.process)
+    assert b.dib==B.dib and b.dip==B.dip and b.amount==B.amount
+    assert 'evento 26' in label
+    assert len(context.pages)==1
+
+
+def test_queue_row_changed_after_snapshot_is_not_opened(context,site):
+    url,_=site
+    page=context.new_page()
+    page.goto(url+'/queue')
+    adapter=Eproc(context)
+    items=adapter.queue_items()
+    page.locator(S.QUEUE_ROWS).first.evaluate("el=>el.value='outro-processo'")
+    with pytest.raises(AutomationError,match='listagem mudou'):
+        adapter.open_process(items[0])
+    assert len(context.pages)==1

@@ -50,12 +50,15 @@ não expõe uma porta CDP para você configurar.
    espera; não tenta fazer login nem iniciar a fila automaticamente.
 4. Abra **Lista de Processos por Localizador** nessa janela.
    Clique em **Iniciar processamento**. O sistema marca **100** na paginação,
-   seleciona as linhas e clica em **Abrir os processos selecionados em abas/janelas**.
-   Aguarda cada aba carregar, lê e preenche um processo, e segue para o próximo.
+   seleciona **somente um processo** e clica em **Abrir os processos selecionados em abas/janelas**.
+   Aguarda essa aba carregar, lê e preenche o formulário, mantém a aba para
+   conferência e então abre o próximo processo. As demais linhas ainda não
+   abertas permanecem na fila; não há carregamento de todas ao mesmo tempo.
    Confirmações dessa abertura são aceitas automaticamente. Se o eproc
    repetir o link no topo e no rodapé, somente um deles é clicado. Alertas
    ou falhas de JavaScript na abertura aparecem no painel.
-   Se uma aba falhar, registra o problema e continua com as demais.
+   Se uma aba falhar, registra o problema e continua com as demais linhas.
+   Não altere a ordenação ou os filtros da lista enquanto a fila estiver rodando.
    Se a lista não estiver disponível,
    o painel explica o problema e permite ajustar a página e iniciar novamente.
 5. Em **Conferir formulário**, revise a proposta e as abas, edite DIB/DIP/DCB
@@ -224,3 +227,20 @@ Playwright, instale-o com `python -m playwright install chromium`.
 Feche somente janelas que estiverem usando o perfil da automação antes de
 reabrir. Não remova o perfil ou o banco como tentativa de corrigir falhas:
 isso pode perder o login e as proteções contra reenvio.
+
+
+## Nova tentativa após erro de leitura
+
+Processos em **ERRO_LEITURA** ou **ERRO_PREENCHIMENTO**, sem envio ou tentativa
+reservada, podem ser lidos novamente numa nova execução. Encerre ou cancele a
+execução anterior, abra uma nova execução e inicie na lista do eproc. Registros
+ignorados por erro também podem voltar à fila. Os dados e a aprovação antigos
+são invalidados; a nova leitura exige nova conferência. O histórico permanece
+no banco. Envios e tentativas já reservadas continuam bloqueados contra reenvio.
+Não apague `runtime/state.db` para tentar novamente.
+
+A leitura reconhece títulos quebrados em linhas e tabelas estruturadas com
+Tipo, DIB/Restabelecimento e DIP mesmo quando o título é diferente. Se houver
+mais de uma tabela compatível, exige revisão manual. HTML carregado por
+JavaScript é lido do conteúdo renderizado no navegador; PDFs sem texto,
+imagens digitalizadas e formatos sem esses campos exigem revisão manual.

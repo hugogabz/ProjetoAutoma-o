@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 import threading
@@ -52,7 +53,7 @@ def site():
             code,ctype = 200,'text/html; charset=utf-8'
             if parsed.path == '/queue':
                 count = int(query.get('count',['3'])[0])
-                popup = ';'.join(f"window.open('/process?num_processo={n}','_blank')" for n in (NUMBERS + [f'{i:09d}20264060001' for i in range(4,count+1)])[:count])
+                popup = ';'.join(f"if((document.getElementById('chkInfraItem{i}') || document.querySelector('iframe')?.contentDocument.getElementById('chkInfraItem{i}')).checked) window.open('/process?num_processo={n}','_blank')" for i,n in enumerate( (NUMBERS + [f'{i:09d}20264060001' for i in range(4,count+1)])[:count]))
                 content = '<input type="radio" name="paginacao" id="optPaginacao100" value="100" checked><title>eproc · Lista de Processos por Localizador</title><h1>Lista de Processos por Localizador</h1>'+''.join(f'<input type="checkbox" id="chkInfraItem{i}" checked>' for i in range(count))+'''<a id="lnkInfraCheck" href="#" onclick="window.toggles=(window.toggles||0)+1;document.querySelectorAll('input[type=checkbox]').forEach(x=>x.checked=!x.checked)">Todos</a>'''+f'<a href="#" onclick="abreProcessosSelecionadosEmAbas();">Abrir os processos selecionados em abas/janelas</a><script>function abreProcessosSelecionadosEmAbas(){{{popup}}}</script>'
             elif parsed.path == '/process':
                 content = f'<h1>{number}</h1><table><tr><td>Proposta de conciliação</td><td><a class="infraLinkDocumento" data-nome="PROACORDO" href="/wrapper?num_processo={number}&SeqDocumento=1&numSeqEvento=26" target="_blank">PROACORDO1</a></td></tr></table><a class="infraButton" href="/form?num_processo={number}">Requisição CEAB/DJ</a><a href="/minute?num_processo={number}">Minutar</a>'
@@ -60,6 +61,8 @@ def site():
                 content = f'<iframe id="conteudoIframe" name="superior" src="/proposal?num_processo={number}"></iframe>'
             elif parsed.path == '/proposal':
                 content = proposal(number,amount=number != NUMBERS[1],invalid=number==NUMBERS[2])
+                if counts.get('dynamic'):
+                    content = '<html><body>Carregando documento...<script>setTimeout(()=>document.body.innerHTML='+json.dumps(content)+',150)</script></body></html>'
             elif parsed.path == '/form': content = form(number)
             elif parsed.path == '/sent':
                 counts['sent'] += 1

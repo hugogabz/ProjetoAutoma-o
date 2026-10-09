@@ -2,7 +2,7 @@
 
 Ambiente testado: Python 3.12, Chromium 151 e dependências de `requirements.lock`.
 
-- `python -m pytest -q`: **65 testes aprovados, nenhum pulado**, com as amostras
+- `python -m pytest -q`: **78 testes aprovados, nenhum pulado**, com as amostras
   pessoais disponíveis no diretório local ignorado `samples/private/`.
 - Novo modo padrão: worker abre navegador gerenciado com perfil persistente,
   espera comando explícito antes de processar e não exige uma porta CDP.
@@ -10,9 +10,12 @@ Ambiente testado: Python 3.12, Chromium 151 e dependências de `requirements.loc
   armazenamento da aba (sessionStorage) preservados após fechar e reabrir
   Chromium no mesmo perfil. A aba autenticada é restaurada sem visitar a URL
   inicial de login; a aba vazia adicional do Chrome não é confundida com ela.
-- Paginação alterada com recarga para 100; clique no link fornecido abre 100
-  abas locais, com 100 números distintos. Seleção parcial não inverte linhas
-  previamente marcadas.
+- Paginação com recarga para 100 verificada. O worker abre somente o processo
+  atual, lê e preenche antes de abrir o seguinte. A quantidade de abas após
+  cada etapa corresponde somente aos processos já preparados; os formulários
+  ficam disponíveis para conferência e envio posterior.
+- Rotina de abertura com confirmações mantém os testes de seleção parcial e
+  de links repetidos. Uma linha alterada após preparar a fila não é aberta.
 - Regressão reproduzida no código anterior: confirmação de abertura cancelada
   automaticamente impedia todas as abas. Agora a confirmação é aceita apenas
   durante o clique de abertura; confirmações posteriores continuam sem aceite.
@@ -20,8 +23,16 @@ Ambiente testado: Python 3.12, Chromium 151 e dependências de `requirements.loc
   do frame das linhas. Alertas imediatos ou atrasados e falhas de JavaScript
   são relatados sem aguardar 60 segundos por abas que não abrirão.
 - Aba aberta inicialmente em about:blank aguarda navegação atrasada. Worker
-  lê a primeira antes de identificar a próxima, registra uma aba com falha
+  lê a primeira antes de abrir a próxima, registra uma aba com falha
   e continua para a seguinte.
+- Leitura de HTML carregado por JavaScript no frame do documento, títulos
+  quebrados em linhas/caracteres invisíveis, tabelas com título diferente mas
+  estrutura única Tipo/DIB/DIP, valores em tabela aninhada e cálculos em
+  tabela separada. Tabelas compatíveis múltiplas continuam rejeitadas.
+- ERRO_LEITURA, ERRO_PREENCHIMENTO e registros ignorados por erro podem voltar
+  numa nova execução sem envio reservado. Dados/aprovação anteriores são
+  invalidados e o histórico é preservado. Reserva de envio impede nova
+  tentativa mesmo se o status posterior tiver sido alterado para erro.
 - Execução completa do worker gerenciado, com conferência e envio simulado,
   sem clicar em Intimar ou salvar minuta. Abas permanecem abertas após terminar;
   o comando Encerrar navegador fecha o contexto e mantém o perfil no disco.

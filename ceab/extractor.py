@@ -11,6 +11,17 @@ DATE = r'\d{2}[./]\d{2}[./]\d{4}'
 CNJ = r'\d{7}-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}'
 MONEY = r'R\s*\$\s*([\d.]+,\d{2})'
 ANCHOR = 'TABELA COM DADOS PARA CUMPRIMENTO'
+ANCHOR_PATTERN = re.compile(r'TABELA\s+COM\s+DADOS\s+PARA\s+CUMPRIMENTO')
+
+
+def heading_text(text):
+    return normalize(re.sub('[\u00ad\u200b\ufeff]','',text or ''))
+
+
+def is_benefit_table(rows):
+    keys = {field_name(row[0]) for row in rows if row}
+    return {'kind','dib','dip'} <= keys
+
 
 
 def digits(value):
@@ -36,12 +47,20 @@ def field_name(label):
 
 
 def table_values(tables):
+    # Sem título reconhecível, aceitar somente uma tabela estruturada com
+    # Tipo + DIB/Restabelecimento + DIP. Datas avulsas nunca são suficientes.
+    if not any(ANCHOR in heading_text(' '.join(c or '' for c in row)) for table in tables for row in table):
+        candidates = [table for table in tables if is_benefit_table(table)]
+        if len(candidates) > 1:
+            raise AutomationError('DOCUMENTO_ILEGIVEL','Mais de uma tabela com Tipo, DIB e DIP; revisão manual necessária.')
+        if candidates:
+            tables = [[[ANCHOR]]]+tables[tables.index(candidates[0]):]
     values, value_lines = {}, []
     started, collecting_amount, previous = False, False, None
     for table in tables:
         for row in table:
             cells = [re.sub(r'\s+', ' ', c or '').strip() for c in row]
-            if any(ANCHOR in normalize(c) for c in cells):
+            if ANCHOR in heading_text(' '.join(cells)):
                 if started:
                     raise AutomationError('DOCUMENTO_ILEGIVEL', 'Mais de uma tabela de cumprimento; revisão manual necessária.')
                 started = True
@@ -83,10 +102,12 @@ def table_values(tables):
 def text_values(text):
     """Alternativa por colunas de texto/layout, limitada aos dois blocos do PRD."""
     lines = text.splitlines()
-    anchors = [i for i,line in enumerate(lines) if ANCHOR in normalize(line)]
-    if len(anchors) != 1:
+    normalized = '\n'.join(heading_text(line) for line in lines)
+    matches = list(ANCHOR_PATTERN.finditer(normalized))
+    if len(matches) != 1:
         raise AutomationError('DOCUMENTO_ILEGIVEL', 'Tabela de cumprimento ausente ou ambígua.')
-    block = lines[anchors[0]+1:]
+    anchor_end = normalized[:matches[0].end()].count('\n')
+    block = lines[anchor_end+1:]
     honor = next((i for i,line in enumerate(block) if 'HONORARIOS' in normalize(line)),len(block))
     block = block[:honor]
     label_pattern = re.compile(r'^(Tipo|Espécie(?: de dependente)?|NB(?:\s*\(opcional\))?|DIB(?:\s*\([^)]*\))?|DIP(?:\s*\([^)]*\))?|DCB(?:\s*\([^)]*\))?|Restabelecimento a partir de|Início dos efeitos financeiros|RMI(?:\s*\([^)]*\))?)(?=\s|:|$)', re.I)
@@ -210,27 +231,20 @@ def extract_pdf(content: bytes, expected_process=None):
         raise AutomationError('DOCUMENTO_ILEGIVEL', 'PDF não pôde ser lido; confira o documento manualmente.') from exc
 
 
-def extract_html(content: str, expected_process=None):
+def extract_html(content: str, expected_process=None, rendered_text=None):
     soup = BeautifulSoup(content, 'html.parser')
     tables = []
-    table_nodes = []
     for table in soup.find_all('table'):
-        if table.find('table'): continue
-        table_nodes.append(table)
         rows = []
         for row in table.find_all('tr'):
             if row.find_parent('table') is table:
                 rows.append([cell.get_text(' ', strip=True) for cell in row.find_all(['td','th'], recursive=False)])
-        tables.append(rows)
-    text = soup.get_text('\n', strip=True)
+        if not table.find('table') or is_benefit_table(rows) or any(heading_text(' '.join(c or '' for c in row)) == ANCHOR for row in rows):
+            tables.append(rows)
+    text = rendered_text or soup.get_text('\n', strip=True)
+    if len(ANCHOR_PATTERN.findall(heading_text(text))) > 1:
+        raise AutomationError('DOCUMENTO_ILEGIVEL','Mais de uma tabela de cumprimento; revisão manual necessária.')
     values, amount = table_values(tables)
-    # A âncora pode ser um título externo à tabela HTML.
-    if not values and ANCHOR in normalize(text):
-        for i, table in enumerate(table_nodes):
-            if any(field_name(c.get_text(' ', strip=True)) == 'kind' for c in table.find_all(['td','th'])):
-                subset = tables[i:]
-                values, amount = table_values([[[ANCHOR]]] + subset)
-                break
     if not values:
         values, amount = text_values(text)
     return build_benefit(text, values, amount, expected_process)

@@ -48,7 +48,9 @@ def test_worker_full_dry_run_isolates_errors(context,site,tmp_path):
     run = state.create_execution(True)
     adapter = Eproc(context,lambda n,a,v=None,r='OK':state.log(run,n,a,v,r))
     worker = Worker(state,run,adapter)
-    for _ in range(3): assert worker.step()
+    for i in range(3):
+        assert worker.step()
+        assert len(context.pages)==i+2  # fila + somente os processos já preparados
     assert [r['status'] for r in state.processes(run)] == ['PREENCHIDO','PREENCHIDO','ERRO_LEITURA']
     assert state.process(NUMBERS[2])['error_code']=='TIPO_DESCONHECIDO'
     state.command(run,'pausar')
@@ -176,7 +178,8 @@ def test_worker_reads_first_before_identifying_next_and_skips_failed_tab(tmp_pat
         def __init__(self,label): self.url=label
     pages=[Page(str(i)) for i in range(3)]
     class Adapter:
-        def open_queue(self): return pages
+        def queue_items(self): return pages
+        def open_process(self,item): return item
         def identify(self,page):
             calls.append('identify:'+page.url)
             if page is pages[1]: raise AutomationError('PROCESSO_DIVERGENTE','Página lenta.')
@@ -193,3 +196,32 @@ def test_worker_reads_first_before_identifying_next_and_skips_failed_tab(tmp_pat
     assert worker.step()
     assert calls==['identify:0','read:0','identify:1','identify:2','read:2']
     assert state.process(NUMBERS[2])['status']=='PREENCHIDO'
+
+
+@pytest.mark.parametrize('status',['ERRO_LEITURA','ERRO_PREENCHIMENTO','IGNORADO'])
+def test_failed_unsent_process_can_be_reread_in_new_execution(tmp_path,status):
+    state=State(tmp_path/'state.db')
+    first=state.create_execution()
+    prepared(state,first)
+    state.update_process(B.process,status,error_code='DOCUMENTO_ILEGIVEL',message='Tabela ausente')
+    state.execution_update(first,status='CANCELADO')
+    second=state.create_execution()
+    assert state.add_process(second,B.process)
+    row=state.process(B.process)
+    assert row['status']=='NA_FILA' and row['execution_id']==second
+    assert row['approved_data'] is None and row['read_data'] is None
+    assert b'REINICIAR_SEM_ENVIO' in state.export_csv()
+    assert b'Tabela ausente' in state.export_csv()
+
+
+def test_error_with_reserved_send_never_becomes_retryable(tmp_path):
+    state=State(tmp_path/'state.db')
+    first=state.create_execution(False)
+    prepared(state,first)
+    state.approve(first,{B.process:B.to_dict()})
+    assert state.claim_send(B.process)
+    state.update_process(B.process,'ERRO_LEITURA',error_code='DOCUMENTO_ILEGIVEL')
+    state.execution_update(first,status='ERRO')
+    second=state.create_execution()
+    assert not state.add_process(second,B.process)
+    assert 'tentativa de envio' in state.notices(second)[0]['result']

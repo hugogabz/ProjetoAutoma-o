@@ -120,14 +120,19 @@ class State:
             old = db.execute('SELECT * FROM processo WHERE number=?',(number,)).fetchone()
             if old:
                 previous_run = db.execute('SELECT status FROM execucao WHERE id=?',(old['execution_id'],)).fetchone()
+                retry_status = old['status'] in ('NA_FILA','LIDO','PREENCHIDO','APROVADO','ERRO_LEITURA','ERRO_PREENCHIMENTO') or (old['status']=='IGNORADO' and old['error_code'])
+                previous_finished = previous_run['status'] in ('CANCELADO','ERRO','CONCLUIDO')
                 restartable = old['execution_id'] != run and not old['sent_at'] and not old['send_started_at'] and (
-                    old['simulated'] or (previous_run['status'] in ('CANCELADO','ERRO') and old['status'] in ('NA_FILA','LIDO','PREENCHIDO','APROVADO')))
+                    old['simulated'] or (previous_finished and retry_status))
                 if restartable:
                     db.execute('UPDATE processo SET execution_id=?,status=?,read_data=NULL,approved_data=NULL,decision=NULL,document=NULL,error_code=NULL,message=?,simulated=0,updated_at=? WHERE number=?',
                                (run,'NA_FILA','Nova leitura; aprovação anterior invalidada.',now(),number))
                     self._log(db,run,number,'REINICIAR_SEM_ENVIO',{},'Nova conferência obrigatória; auditoria anterior preservada.')
                     return True
-                self._log(db,run,number,'DUPLICADO',{},'Registro existente preservado; não reprocessar.')
+                reason = ('Envio ou tentativa de envio anterior registrada; não será reenviado.' if old['sent_at'] or old['send_started_at'] else
+                          'Processo já registrado nesta execução; não será aberto novamente.' if old['execution_id']==run else
+                          'Registro anterior preservado; não está disponível para nova leitura automática. Veja o histórico.')
+                self._log(db,run,number,'DUPLICADO',{},reason)
                 return False
             db.execute('INSERT INTO processo(number,execution_id,status,updated_at) VALUES(?,?,?,?)',(number,run,'NA_FILA',now()))
             self._log(db,run,number,'NA_FILA',{},'OK')
